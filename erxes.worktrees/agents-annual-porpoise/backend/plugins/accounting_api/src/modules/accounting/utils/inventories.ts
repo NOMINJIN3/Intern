@@ -1,0 +1,1077 @@
+import { IUserDocument } from 'erxes-api-shared/core-types';
+import {
+  fixNum,
+  getPureDate,
+  getTomorrow,
+  graphqlPubsub,
+  sendTRPCMessage,
+} from 'erxes-api-shared/utils';
+import { IModels } from '~/connectionResolvers';
+import {
+  ADJ_INV_STATUSES,
+  IAdjustInvDetailParams,
+  IAdjustInventory,
+  IAdjustInventoryDocument,
+  ICommonAdjInvDetailInfo,
+} from '../@types/adjustInventory';
+import { JOURNALS, TR_FOLLOW_TYPES, TR_STATUSES } from '../@types/constants';
+import { ITransactionDocument, ITrDetail } from '../@types/transaction';
+
+export const activeCost = async (
+  models: IModels,
+  accountId: string,
+  branchId?: string,
+  departmentId?: string,
+  productIds: string[] = [],
+) => {
+  const aggCosts = await models.AdjustInvDetails.aggregate([
+    {
+      $match: {
+        accountId,
+        branchId: branchId || '_',
+        departmentId: departmentId || '_',
+        productId: { $in: productIds || [] },
+      },
+    },
+  ]);
+
+  const result = {};
+  for (const detail of aggCosts) {
+    result[detail.productId] = {
+      totalCost: detail.cost,
+      unitCost: detail.unitCost,
+      remainder: detail.remainder,
+    };
+  }
+
+  return result;
+};
+
+export const modifierWrapper = async (
+  models: IModels,
+  adjustInventory: IAdjustInventoryDocument,
+  modifier: any,
+  hasObj = false,
+) => {
+  const adjustId = adjustInventory._id;
+
+  await models.AdjustInventories.updateAdjustInventory(adjustId, modifier);
+
+  graphqlPubsub.publish(`accountingAdjustInventoryChanged:${adjustId}`, {
+    accountingAdjustInventoryChanged: {
+      ...adjustInventory,
+      ...modifier,
+    },
+  });
+
+  if (hasObj) {
+    return await models.AdjustInventories.getAdjustInventory(adjustId);
+  }
+
+  return;
+};
+
+export const checkValidDate = async (
+  models: IModels,
+  adjustInventory: IAdjustInventory,
+) => {
+  const date = getPureDate(adjustInventory.date);
+  const afterAdjInvs = await models.AdjustInventories.find({
+    date: { $gte: date },
+    status: ADJ_INV_STATUSES.PUBLISH,
+  }).lean();
+
+  if (afterAdjInvs.length) {
+    throw new Error(
+      'Үүнээс хойш батлагдсан тохируулга байгаа учир энэ огноонд тохируулга үүсгэх шаардлагагүй.',
+    );
+  }
+
+  const lowBeforeAdjInvs = await models.AdjustInventories.find({
+    date: { $lt: date },
+    status: { $ne: ADJ_INV_STATUSES.PUBLISH },
+  }).lean();
+  if (lowBeforeAdjInvs.length) {
+    throw new Error(
+      'Энэнээс урагш дутуу гүйцэтгэлтэй тохируулга байна. Түүнийг устгах эсвэл гүйцээж байж энэ огноонд тохируулга үүсгэнэ үү.',
+    );
+  }
+
+  const beforeAdjInv = await models.AdjustInventories.findOne({
+    date: { $lt: date },
+    status: ADJ_INV_STATUSES.PUBLISH,
+  })
+    .sort({ date: -1 })
+    .lean();
+
+  let beginDate = beforeAdjInv?.date;
+  if (!beginDate) {
+    const firstTr = await models.Transactions.findOne({
+      date: { $lte: date },
+      'details.productId': { $exists: true, $ne: '' },
+      status: { $in: TR_STATUSES.ACTIVE },
+    })
+      .sort({ date: 1 })
+      .lean();
+    beginDate = firstTr?.date;
+  }
+
+  if (!beginDate) {
+    throw new Error(
+      'Үүнээс урагш гүйлгээ ч алга, тохируулга ч алга. Тиймээс тохируулах шаардлагагүй.',
+    );
+  }
+
+  return { beginDate, beforeAdjInv };
+};
+
+export const detailsClear = async (
+  models: IModels,
+  user: IUserDocument,
+  adjustInventory: IAdjustInventoryDocument,
+  date?: Date,
+) => {
+  const adjustId = adjustInventory._id;
+  if (!date || !adjustInventory.beginDate || !adjustInventory.successDate) {
+    const { beforeAdjInv } = await checkValidDate(models, adjustInventory);
+    if (beforeAdjInv) {
+      await models.AdjustInvDetails.copyAdjustInvDetails({
+        sourceAdjustId: beforeAdjInv._id,
+        adjustId,
+      });
+    }
+
+    return await modifierWrapper(
+      models,
+      adjustInventory,
+      { successDate: null, modifiedBy: user._id },
+      true,
+    );
+  }
+
+  if (
+    !(
+      date &&
+      ((adjustInventory.beginDate && adjustInventory.beginDate < date) ||
+        (adjustInventory.successDate && adjustInventory.successDate > date))
+    )
+  ) {
+    throw new Error('wrong date');
+  }
+
+  const details = await models.AdjustInvDetails.find({ adjustId }).lean();
+  for (const detail of details) {
+    const newInfos: ICommonAdjInvDetailInfo[] =
+      (detail.infoPerDate || [])
+        .filter((ip) => ip.date < date)
+        .sort((a, b) => (a.date > b.date ? 1 : -1)) || [];
+
+    const lastInfo: ICommonAdjInvDetailInfo | undefined =
+      newInfos[newInfos.length - 1];
+
+    // update from lastInfoDate
+    await models.AdjustInvDetails.updateOne(
+      { _id: detail._id },
+      {
+        $set: {
+          ...detail,
+          infoPerDate: newInfos,
+          remainder: lastInfo?.remainder ?? 0,
+          cost: lastInfo?.cost ?? 0,
+          unitCost: lastInfo?.unitCost ?? 0,
+          soonInCount: lastInfo?.soonInCount ?? 0,
+          soonOutCount: lastInfo?.soonOutCount ?? 0,
+        },
+      },
+    );
+  }
+  return await modifierWrapper(
+    models,
+    adjustInventory,
+    { successDate: date, modifiedBy: user._id },
+    true,
+  );
+};
+
+const recheckValidDate = async (
+  models: IModels,
+  adjustInventory,
+  beginDate,
+) => {
+  if (!adjustInventory?.successDate) {
+    return beginDate;
+  }
+
+  // yavaandaa logoos delete iig mun shalgah yum baina
+  const betweenModifiedFirstTr = await models.Transactions.findOne({
+    date: { $gte: beginDate, $lte: adjustInventory.successDate },
+    'details.productId': { $exists: true, $ne: '' },
+    $or: [
+      {
+        updatedAt: { $exists: false },
+        createdAt: { $gte: adjustInventory.checkedAt },
+      },
+      { updatedAt: { $gte: adjustInventory.checkedAt } },
+    ],
+  })
+    .sort({ date: 1 })
+    .lean();
+
+  if (betweenModifiedFirstTr) {
+    return betweenModifiedFirstTr.date;
+  }
+
+  return adjustInventory.successDate;
+};
+
+const calcTrs = async (
+  models: IModels,
+  {
+    adjustId,
+    aggregateTrs,
+    multiplier = 1,
+  }: {
+    adjustId: string;
+    aggregateTrs: {
+      _id: IAdjustInvDetailParams;
+      records: ITransactionDocument & { details: ITrDetail }[];
+    }[];
+    beforeAdjInvId?: string;
+    multiplier?: number;
+  },
+) => {
+  for (const trs of aggregateTrs) {
+    const { _id, records } = trs;
+    const { accountId, branchId, departmentId, productId } = _id;
+
+    if (!branchId || !departmentId || !productId || !accountId) {
+      continue;
+    }
+
+    const count = fixNum(
+      records.reduce((sum, rec) => sum + (rec.details.count ?? 0), 0),
+    );
+    const amount = fixNum(
+      records.reduce((sum, rec) => sum + (rec.details.amount ?? 0), 0),
+    );
+
+    await models.AdjustInvDetails.increaseAdjustInvDetail({
+      adjustId,
+      branchId,
+      departmentId,
+      accountId,
+      productId,
+      count,
+      amount,
+      multiplier,
+    });
+  }
+};
+
+const calcInvTrs = async (
+  models: IModels,
+  {
+    adjustId,
+    beginDate,
+    endDate,
+    trFilter,
+  }: {
+    adjustId: string;
+    beginDate: Date;
+    endDate: Date;
+    trFilter: any;
+    beforeAdjInvId?: string;
+  },
+) => {
+  const commonMatch: any = {
+    date: { $gte: beginDate, $lt: endDate },
+    ...trFilter,
+  };
+  const commonAggregates: any[] = [
+    { $unwind: '$details' },
+    { $sort: { updatedAt: 1 } },
+    {
+      $group: {
+        _id: {
+          accountId: '$details.accountId',
+          branchId: '$branchId',
+          departmentId: '$departmentId',
+          productId: '$details.productId',
+        },
+        records: { $push: '$$ROOT' },
+      },
+    },
+  ];
+
+  const incomeAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_INCOME } },
+    ...commonAggregates,
+  ]);
+  await calcTrs(models, { adjustId, aggregateTrs: incomeAggrs });
+
+  const moveOutAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_MOVE } },
+    ...commonAggregates,
+  ]);
+  const moveInAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_MOVE_IN } },
+    ...commonAggregates,
+  ]);
+  await calcTrs(models, {
+    adjustId,
+    aggregateTrs: moveOutAggrs,
+    multiplier: -1,
+  });
+  await calcTrs(models, { adjustId, aggregateTrs: moveInAggrs });
+
+  const outAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_OUT } },
+    ...commonAggregates,
+  ]);
+  await calcTrs(models, { adjustId, aggregateTrs: outAggrs, multiplier: -1 });
+};
+
+// fix:
+const fixRelatedMainJournal = async (
+  models,
+  {
+    ptrId,
+    excludeTrId,
+    oldAmount,
+    newAmount,
+  }: {
+    ptrId: string;
+    excludeTrId: string;
+    oldAmount: number;
+    newAmount: number;
+  },
+) => {
+  return;
+};
+
+const afterCalc = async (models: IModels, trIds: string[]) => {
+  await models.Transactions.updateMany({ _id: { $in: trIds } }, [
+    {
+      $set: {
+        sumDt: {
+          $cond: [
+            { $eq: ['$side', 'dt'] },
+            {
+              $sum: {
+                $map: {
+                  input: '$details',
+                  as: 'item',
+                  in: { $ifNull: ['$$item.amount', 0] },
+                },
+              },
+            },
+            0,
+          ],
+        },
+        sumCt: {
+          $cond: [
+            { $eq: ['$side', 'ct'] },
+            {
+              $sum: {
+                $map: {
+                  input: '$details',
+                  as: 'item',
+                  in: { $ifNull: ['$$item.amount', 0] },
+                },
+              },
+            },
+            0,
+          ],
+        },
+      },
+    },
+  ]);
+};
+
+const getErrorDesc = async (
+  subdomain: string,
+  models: IModels,
+  errFormat: string,
+  args: any,
+) => {
+  let result = errFormat;
+
+  if (errFormat.includes('{productId}') && args.productId) {
+    const product = await sendTRPCMessage({
+      subdomain,
+      pluginName: 'core',
+      module: 'products',
+      action: 'findOne',
+      defaultValue: {},
+      input: { query: { _id: args.productId } },
+    });
+    if (product?._id) {
+      result = result.replace(
+        /{productId}/g,
+        `${product.code} - ${product.name}`,
+      );
+    }
+  }
+
+  if (errFormat.includes('{accountId}') && args.accountId) {
+    const account = await models.Accounts.findOne({ _id: args.accountId });
+
+    if (account?._id) {
+      result = result.replace(
+        /{accountId}/g,
+        `${account.code} - ${account.name}`,
+      );
+    }
+  }
+
+  if (errFormat.includes('{branchId}') && args.branchId) {
+    const branch = await sendTRPCMessage({
+      subdomain,
+      pluginName: 'core',
+      module: 'branches',
+      action: 'findOne',
+      defaultValue: {},
+      input: { query: { _id: args.branchId } },
+    });
+    if (branch?._id) {
+      result = result.replace(
+        /{branchId}/g,
+        `${branch.code} - ${branch.title}`,
+      );
+    }
+  }
+
+  if (errFormat.includes('{departmentId}') && args.departmentId) {
+    const department = await sendTRPCMessage({
+      subdomain,
+      pluginName: 'core',
+      module: 'departments',
+      action: 'findOne',
+      defaultValue: {},
+      input: { query: { _id: args.departmentId } },
+    });
+    if (department?._id) {
+      result = result.replace(
+        /{departmentId}/g,
+        `${department.code} - ${department.title}`,
+      );
+    }
+  }
+  return result;
+};
+
+const fixOutTrs = async (
+  subdomain: string,
+  models: IModels,
+  {
+    adjustId,
+    outAggrs,
+  }: {
+    adjustId: string;
+    outAggrs: {
+      _id: IAdjustInvDetailParams;
+      records: (ITransactionDocument & { details: ITrDetail })[];
+    }[];
+  },
+) => {
+  for (const outTrs of outAggrs) {
+    const trIds: string[] = [];
+    const { _id, records } = outTrs;
+    const { accountId, branchId, departmentId, productId } = _id;
+
+    if (!branchId || !departmentId || !productId || !accountId) {
+      continue;
+    }
+
+    const detailFilter = {
+      productId,
+      accountId,
+      branchId,
+      departmentId,
+    };
+
+    const sumCount = fixNum(
+      records.reduce((sum, rec) => sum + (rec.details.count ?? 0), 0),
+    );
+
+    const adjustDetail = await models.AdjustInvDetails.getAdjustInvDetail({
+      ...detailFilter,
+      adjustId,
+    });
+
+    let remainder = fixNum(adjustDetail.remainder ?? 0);
+    let cost = fixNum(adjustDetail.cost ?? 0);
+    const unitCost = fixNum(cost / (remainder ?? 1));
+
+    if (remainder < sumCount) {
+      const error = await getErrorDesc(
+        subdomain,
+        models,
+        `Not enough stock for {productId} in {accountId} {branchId} {departmentId} (out)`,
+        { productId, accountId, branchId, departmentId },
+      );
+      await models.AdjustInvDetails.updateOne(
+        { _id: adjustDetail._id },
+        { $set: { error } },
+      );
+      throw new Error(error);
+    }
+
+    // bichleg bureer zalruulga hiine ingehdee haritstsan buyu orlogo talaa davhar shinechilsen, shinechilj baih burtee cache ee tsenegleh yostoi
+    for (const rec of records) {
+      const { details } = rec;
+      const { count, amount } = details;
+      const newCost = fixNum((count ?? 0) * unitCost);
+
+      remainder -= fixNum(count ?? 0);
+      cost -= newCost;
+
+      if (newCost === amount) {
+        continue;
+      }
+
+      // out - fix
+      await models.Transactions.updateOne(
+        { _id: rec._id },
+        {
+          $set: {
+            'details.$[d].unitPrice': unitCost,
+            'details.$[d].amount': newCost,
+            sumDt: 0,
+            sumCt: fixNum(rec.sumCt - amount + newCost),
+          },
+        },
+        { arrayFilters: [{ 'd._id': { $eq: details._id } }] },
+      );
+
+      trIds.push(rec._id);
+
+      await fixRelatedMainJournal(models, {
+        ptrId: rec.ptrId,
+        excludeTrId: rec._id,
+        oldAmount: amount,
+        newAmount: newCost,
+      });
+    }
+
+    // cache out adjustDetail
+    await models.AdjustInvDetails.updateAdjustInvDetail({
+      adjustId,
+      productId,
+      accountId,
+      branchId,
+      departmentId,
+      remainder,
+      cost,
+      unitCost,
+    });
+    await afterCalc(models, trIds);
+  }
+};
+
+const fixMoveTrs = async (
+  subdomain: string,
+  models: IModels,
+  {
+    adjustId,
+    moveAggrs,
+  }: {
+    adjustId: string;
+    moveAggrs: {
+      _id: IAdjustInvDetailParams;
+      records: (ITransactionDocument & { details: ITrDetail })[];
+    }[];
+    beforeAdjInvId?: string;
+  },
+) => {
+  for (const outcomeTrs of moveAggrs) {
+    const trIds: string[] = [];
+    const { _id, records } = outcomeTrs;
+    const { accountId, branchId, departmentId, productId } = _id;
+
+    if (!branchId || !departmentId || !productId || !accountId) {
+      continue;
+    }
+
+    const detailFilter = {
+      productId,
+      accountId,
+      branchId,
+      departmentId,
+    };
+
+    const sumCount = fixNum(
+      records.reduce((sum, rec) => sum + (rec.details.count ?? 0), 0),
+    );
+
+    const adjustDetail = await models.AdjustInvDetails.getAdjustInvDetail({
+      ...detailFilter,
+      adjustId,
+    });
+
+    let remainder = fixNum(adjustDetail?.remainder ?? 0);
+    let cost = fixNum(adjustDetail?.cost ?? 0);
+    const unitCost = fixNum(cost / (remainder ?? 1));
+
+    if (remainder < sumCount) {
+      const error = await getErrorDesc(
+        subdomain,
+        models,
+        'Not enough stock for {productId} in {accountId} {branchId} {departmentId}, (move)',
+        { productId, accountId, branchId, departmentId },
+      );
+      await models.AdjustInvDetails.updateOne(
+        { _id: adjustDetail._id },
+        { $set: { error } },
+      );
+      throw new Error(error);
+    }
+
+    // bichleg bureer zalruulga hiine ingehdee haritstsan buyu orlogo talaa davhar shinechilsen, shinechilj baih burtee cache ee tsenegleh yostoi
+    for (const rec of records) {
+      const { details } = rec;
+      const { count, amount, followInfos } = details;
+      const newCost = fixNum((count ?? 0) * unitCost);
+
+      const moveInRecs = await models.Transactions.aggregate([
+        {
+          $match: {
+            originId: rec._id,
+            originType: TR_FOLLOW_TYPES.INV_MOVE_IN,
+          },
+        },
+        { $unwind: '$details' },
+        { $match: { 'details.originId': details._id } },
+      ]);
+
+      const moveInRec = moveInRecs[0];
+
+      if (!moveInRec) {
+        throw new Error(`MoveIn not found for ${rec.parentId}`);
+      }
+
+      remainder -= fixNum(count);
+      cost -= newCost;
+
+      if (newCost === amount) {
+        // cache move in adjustDetail
+        await models.AdjustInvDetails.increaseAdjustInvDetail({
+          adjustId,
+          productId,
+          accountId: moveInRec.details.accountId,
+          branchId: moveInRec.branchId,
+          departmentId: moveInRec.departmentId,
+          count: moveInRec.details.count,
+          amount: moveInRec.details.amount,
+          multiplier: 1,
+        });
+        continue;
+      }
+
+      const moveInCost = fixNum(newCost + (followInfos?.perCost ?? 0));
+
+      // out - fix
+      await models.Transactions.updateOne(
+        { _id: rec._id },
+        {
+          $set: {
+            'details.$[d].unitPrice': unitCost,
+            'details.$[d].amount': newCost,
+          },
+        },
+        { arrayFilters: [{ 'd._id': { $eq: details._id } }] },
+      );
+
+      // in - Fix
+      await models.Transactions.updateOne(
+        { _id: moveInRec._id },
+        {
+          $set: {
+            'details.$[d].unitPrice': unitCost,
+            'details.$[d].amount': moveInCost,
+          },
+        },
+        { arrayFilters: [{ 'd._id': { $eq: moveInRec.details._id } }] },
+      );
+
+      // cache move in adjustDetail
+      await models.AdjustInvDetails.increaseAdjustInvDetail({
+        adjustId,
+        productId,
+        accountId: moveInRec.details.accountId,
+        branchId: moveInRec.branchId,
+        departmentId: moveInRec.departmentId,
+        count: moveInRec.details.count,
+        amount: moveInCost,
+        multiplier: 1,
+      });
+      trIds.push(rec._id, moveInRec._id);
+    }
+
+    // cache move out adjustDetail
+    await models.AdjustInvDetails.updateAdjustInvDetail({
+      adjustId,
+      productId,
+      accountId,
+      branchId,
+      departmentId,
+      remainder,
+      cost,
+      unitCost,
+    });
+    await afterCalc(models, trIds);
+  }
+  return {};
+};
+
+const fixSaleOutTrs = async (
+  subdomain: string,
+  models: IModels,
+  {
+    adjustId,
+    saleOutAggrs,
+  }: {
+    adjustId: string;
+    saleOutAggrs: {
+      _id: IAdjustInvDetailParams;
+      records: (ITransactionDocument & { details: ITrDetail })[];
+    }[];
+    beforeAdjInvId?: string;
+  },
+) => {
+  for (const saleOutTrs of saleOutAggrs) {
+    const trIds: string[] = [];
+    const { _id, records } = saleOutTrs;
+    const { accountId, branchId, departmentId, productId } = _id;
+
+    if (!branchId || !departmentId || !productId || !accountId) {
+      continue;
+    }
+
+    const detailFilter = {
+      productId,
+      accountId,
+      branchId,
+      departmentId,
+    };
+
+    const sumCount = fixNum(
+      records.reduce((sum, rec) => sum + (rec.details.count ?? 0), 0),
+    );
+
+    const adjustDetail = await models.AdjustInvDetails.getAdjustInvDetail({
+      ...detailFilter,
+      adjustId,
+    });
+
+    let remainder = fixNum(adjustDetail?.remainder ?? 0);
+    let cost = fixNum(adjustDetail?.cost ?? 0);
+    const unitCost = fixNum(cost / (remainder ?? 1));
+
+    if (remainder < sumCount) {
+      const error = await getErrorDesc(
+        subdomain,
+        models,
+        'Not enough stock for {productId} in {accountId} {branchId} {departmentId} (sale)',
+        { productId, accountId, branchId, departmentId },
+      );
+      await models.AdjustInvDetails.updateOne(
+        { _id: adjustDetail._id },
+        { $set: { error } },
+      );
+      throw new Error(error);
+    }
+
+    // bichleg bureer zalruulga hiine ingehdee haritstsan buyu orlogo talaa davhar shinechilsen, shinechilj baih burtee cache ee tsenegleh yostoi
+    for (const rec of records) {
+      const { details } = rec;
+      const { count, amount } = details;
+      const newCost = fixNum((count ?? 0) * unitCost);
+
+      const saleSaleRec = (
+        await models.Transactions.aggregate([
+          { $match: { _id: rec.originId } },
+          { $unwind: '$details' },
+          { $match: { 'details._id': details.originId } },
+        ])
+      )[0];
+
+      const saleFollowCostRec = (
+        await models.Transactions.aggregate([
+          {
+            $match: {
+              originId: rec.originId,
+              originType: TR_FOLLOW_TYPES.INV_SALE_COST,
+            },
+          },
+          { $unwind: '$details' },
+          { $match: { 'details.originId': details.originId } },
+        ])
+      )[0];
+
+      if (!saleSaleRec || !saleFollowCostRec) {
+        throw new Error(`Sale main or cost not found for ${rec._id}`);
+      }
+
+      remainder -= fixNum(count ?? 0);
+      cost -= newCost;
+
+      if (newCost === amount) {
+        continue;
+      }
+
+      // out - fix
+      await models.Transactions.updateOne(
+        { _id: rec._id },
+        {
+          $set: {
+            'details.$[d].unitPrice': unitCost,
+            'details.$[d].amount': newCost,
+          },
+        },
+        { arrayFilters: [{ 'd._id': { $eq: details._id } }] },
+      );
+
+      // cost - Fix
+      await models.Transactions.updateOne(
+        { _id: saleFollowCostRec._id },
+        {
+          $set: {
+            'details.$[d].unitPrice': unitCost,
+            'details.$[d].amount': newCost,
+          },
+        },
+        { arrayFilters: [{ 'd._id': { $eq: saleFollowCostRec.details._id } }] },
+      );
+      trIds.push(rec._id, saleFollowCostRec._id);
+    }
+
+    // cache move out adjustDetail
+    await models.AdjustInvDetails.updateAdjustInvDetail({
+      adjustId,
+      productId,
+      accountId,
+      branchId,
+      departmentId,
+      remainder,
+      cost,
+      unitCost,
+    });
+    await afterCalc(models, trIds);
+  }
+  return {};
+};
+
+const fixInvTrs = async (
+  subdomain: string,
+  models: IModels,
+  {
+    adjustId,
+    beginDate,
+    endDate,
+    trFilter,
+  }: {
+    adjustId: string;
+    beginDate: Date;
+    endDate: Date;
+    trFilter: any;
+  },
+) => {
+  const commonMatch: any = {
+    date: { $gte: beginDate, $lt: endDate },
+    ...trFilter,
+  };
+  const commonAggregates: any[] = [
+    { $unwind: '$details' },
+    { $sort: { updatedAt: 1 } },
+    {
+      $group: {
+        _id: {
+          accountId: '$details.accountId',
+          branchId: '$branchId',
+          departmentId: '$departmentId',
+          productId: '$details.productId',
+        },
+        records: { $push: '$$ROOT' },
+      },
+    },
+  ];
+
+  const incomeAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_INCOME } },
+    ...commonAggregates,
+  ]);
+  await calcTrs(models, { adjustId, aggregateTrs: incomeAggrs });
+
+  const moveOutAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_MOVE } },
+    ...commonAggregates,
+  ]);
+  await fixMoveTrs(subdomain, models, { adjustId, moveAggrs: moveOutAggrs });
+
+  const outAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_OUT } },
+    ...commonAggregates,
+  ]);
+  await fixOutTrs(subdomain, models, { adjustId, outAggrs });
+
+  const saleOutAggrs = await models.Transactions.aggregate([
+    { $match: { ...commonMatch, journal: JOURNALS.INV_SALE_OUT } },
+    ...commonAggregates,
+  ]);
+  await fixSaleOutTrs(subdomain, models, { adjustId, saleOutAggrs });
+};
+
+const getUncompletedInventoryTransaction = async (
+  models: IModels,
+  beginDate: Date,
+  endDate: Date,
+) => {
+  return models.Transactions.findOne({
+    date: { $gte: beginDate, $lt: endDate },
+    journal: { $in: JOURNALS.ALL_REAL_INV },
+    status: { $ne: TR_STATUSES.COMPLETE },
+    'details.productId': { $exists: true, $ne: '' },
+  })
+    .sort({ date: 1 })
+    .lean();
+};
+
+export const adjustRunning = async (
+  subdomain: string,
+  models: IModels,
+  user: IUserDocument,
+  {
+    adjustInventory,
+    beginDate,
+    beforeAdjInv,
+  }: {
+    adjustInventory: IAdjustInventoryDocument;
+    beginDate: Date;
+    beforeAdjInv?: IAdjustInventoryDocument | null;
+  },
+) => {
+  try {
+    let currentDate = await recheckValidDate(
+      models,
+      adjustInventory,
+      beginDate,
+    );
+    const date = adjustInventory.date;
+    const adjustId = adjustInventory._id;
+
+    await detailsClear(models, user, adjustInventory, currentDate);
+
+    const trFilter = {
+      'details.productId': { $exists: true, $ne: '' },
+      'details.accountId': { $exists: true, $ne: '' },
+      branchId: { $exists: true, $ne: '' },
+      departmentId: { $exists: true, $ne: '' },
+      status: TR_STATUSES.COMPLETE,
+    };
+
+    // өдөр бүрээр гүйлгээнүүдийг журналаар багцалж тооцож өртгийг зүгшрүүлж шаардлагатай бол гүйлгээг засч эндээсээ цэнэглэнэ
+    while (currentDate < date) {
+      const nextDate = getTomorrow(currentDate);
+
+      try {
+        const uncompletedTr = await getUncompletedInventoryTransaction(
+          models,
+          currentDate,
+          nextDate,
+        );
+
+        if (uncompletedTr) {
+          const warning = `Inventory transaction must be complete before adjusting. Transaction: ${
+            uncompletedTr.number || uncompletedTr._id
+          }`;
+
+          await modifierWrapper(models, adjustInventory, {
+            checkedAt: new Date(),
+            successDate: currentDate,
+            warning,
+            status: ADJ_INV_STATUSES.PROCESS,
+          });
+          return;
+        }
+
+        await fixInvTrs(subdomain, models, {
+          adjustId,
+          beginDate: currentDate,
+          endDate: nextDate,
+          trFilter,
+        });
+
+        let bulkOps: Array<{
+          updateOne: {
+            filter: { _id: string };
+            update: { $push: { infoPerDate: ICommonAdjInvDetailInfo } };
+          };
+        }> = [];
+
+        // toCache
+        let step = 0;
+        const per = 1000;
+        const summary = await models.AdjustInvDetails.find({
+          adjustId,
+        }).countDocuments();
+
+        while (step * per <= summary) {
+          bulkOps = [];
+          const details = await models.AdjustInvDetails.find({ adjustId })
+            .sort({ accountId: 1, branchId: 1, departmentId: 1, productId: 1 })
+            .skip(step * per)
+            .limit(step)
+            .lean();
+          for (const detail of details) {
+            bulkOps.push({
+              updateOne: {
+                filter: { _id: detail._id },
+                update: {
+                  $push: {
+                    infoPerDate: {
+                      date: currentDate,
+                      remainder: detail.remainder,
+                      cost: detail.cost,
+                      unitCost: detail.unitCost,
+                      soonInCount: detail.soonInCount,
+                      soonOutCount: detail.soonOutCount,
+                    },
+                  },
+                },
+              },
+            });
+          }
+          if (bulkOps.length) {
+            await models.AdjustInvDetails.bulkWrite(bulkOps);
+          }
+          step++;
+        }
+        // end toCache
+
+        await modifierWrapper(models, adjustInventory, {
+          checkedAt: new Date(),
+          successDate: nextDate,
+        });
+      } catch (e) {
+        throw new Error(e.message);
+      }
+
+      currentDate = nextDate;
+    }
+
+    await modifierWrapper(models, adjustInventory, {
+      checkedAt: new Date(),
+      status: ADJ_INV_STATUSES.COMPLETE,
+      error: '',
+      warning: '',
+    });
+  } catch (e) {
+    const now = new Date();
+    await modifierWrapper(models, adjustInventory, {
+      checkedDate: now,
+      error: e.message,
+      status: ADJ_INV_STATUSES.PROCESS,
+    });
+  }
+};

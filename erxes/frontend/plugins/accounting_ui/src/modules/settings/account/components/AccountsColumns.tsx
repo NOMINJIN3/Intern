@@ -1,0 +1,239 @@
+import { Cell, ColumnDef } from '@tanstack/react-table';
+import { IAccount, JournalEnum } from '../types/Account';
+import {
+  CurrencyCode,
+  ITextFieldContainerProps,
+  RecordTable,
+  CurrencyField,
+  TextField,
+  useQueryState,
+  RecordTableInlineCell,
+  Popover,
+  Combobox,
+  Command,
+  useConfirm,
+} from 'erxes-ui';
+import { SelectAccountCategory } from '../account-categories/components/SelectAccountCategory';
+import { useAccountEdit } from '../hooks/useAccountEdit';
+import { useAccountsRemove } from '../hooks/useAccountsRemove';
+import { JOURNAL_LABELS } from '../constants/journalLabel';
+import { IconEdit, IconTrash } from '@tabler/icons-react';
+
+const AccountCategoryCell = ({ cell }: { cell: Cell<IAccount, unknown> }) => {
+  const { original } = cell.row;
+  const { editAccount } = useAccountEdit();
+  return (
+    <SelectAccountCategory
+      recordId={original._id}
+      selected={original.categoryId}
+      className="w-full font-normal"
+      onSelect={(categoryId) => {
+        editAccount(
+          {
+            variables: {
+              ...original,
+              categoryId,
+            },
+          },
+          ['categoryId'],
+        );
+      }}
+      variant="ghost"
+      hideChevron
+    />
+  );
+};
+
+const AccountTextField = ({
+  value,
+  field,
+  _id,
+  account,
+}: ITextFieldContainerProps & { account: IAccount }) => {
+  const { editAccount } = useAccountEdit();
+  return (
+    <TextField
+      value={value}
+      scope={`account-${_id}-${field}`}
+      onSave={(value) => {
+        editAccount(
+          {
+            variables: { ...account, [field]: value },
+          },
+          [field],
+        );
+      }}
+      className={'shadow-none rounded-none px-2'}
+    />
+  );
+};
+
+const AccountCurrencyCell = ({ cell }: { cell: Cell<IAccount, unknown> }) => {
+  const { editAccount } = useAccountEdit();
+  return (
+    <CurrencyField.SelectCurrency
+      value={cell.getValue() as CurrencyCode}
+      variant="ghost"
+      className="w-full focus-visible:relative focus-visible:z-10 font-normal"
+      hideChevron
+      onChange={(value) => {
+        editAccount({ variables: { ...cell.row.original, currency: value } }, [
+          'currency',
+        ]);
+      }}
+    />
+  );
+};
+
+export const AccountMoreColumnCell = ({
+  cell,
+}: {
+  cell: Cell<IAccount, unknown>;
+}) => {
+  const [, setOpen] = useQueryState('accountId');
+  const { confirm } = useConfirm();
+  const { removeAccounts } = useAccountsRemove();
+
+  const handleEdit = () => {
+    setOpen(cell.row.original._id);
+  };
+
+  const handleDelete = () =>
+    confirm({
+      message: 'Are you sure you want to delete this account?',
+      options: {
+        okLabel: 'Delete',
+        cancelLabel: 'Cancel',
+      },
+    }).then(() => {
+      removeAccounts({
+        variables: { accountIds: [cell.row.original._id] },
+      });
+    });
+
+  return (
+    <Popover>
+      <Popover.Trigger asChild>
+        <RecordTable.MoreButton className="w-full h-full" />
+      </Popover.Trigger>
+      <Combobox.Content>
+        <Command shouldFilter={false}>
+          <Command.List>
+            <Command.Item value="edit" onSelect={handleEdit}>
+              <IconEdit /> Edit
+            </Command.Item>
+            <Command.Item value="delete" onSelect={handleDelete}>
+              <IconTrash /> Delete
+            </Command.Item>
+          </Command.List>
+        </Command>
+      </Combobox.Content>
+    </Popover>
+  );
+};
+
+export const accountMoreColumn = {
+  id: 'more',
+  cell: AccountMoreColumnCell,
+  size: 33,
+};
+
+export const accountsColumns: ColumnDef<IAccount>[] = [
+  accountMoreColumn,
+  RecordTable.checkboxColumn as ColumnDef<IAccount>,
+  {
+    id: 'code',
+    accessorKey: 'code',
+    header: () => <RecordTable.InlineHead label="Код" />,
+    cell: ({ cell }) => {
+      return (
+        <AccountTextField
+          value={cell.getValue() as string}
+          field="code"
+          _id={cell.row.original._id}
+          account={cell.row.original}
+        />
+      );
+    },
+  },
+  {
+    id: 'name',
+    accessorKey: 'name',
+    header: () => <RecordTable.InlineHead label="Нэр" />,
+    cell: ({ cell }) => {
+      return (
+        <AccountTextField
+          value={cell.getValue() as string}
+          field="name"
+          _id={cell.row.original._id}
+          account={cell.row.original}
+        />
+      );
+    },
+    size: 300,
+  },
+  {
+    id: 'categoryId',
+    accessorKey: 'categoryId',
+    header: () => <RecordTable.InlineHead label="Ангилал" />,
+    cell: ({ cell }) => <AccountCategoryCell cell={cell} />,
+    size: 240,
+  },
+  {
+    id: 'currency',
+    accessorKey: 'currency',
+    header: () => <RecordTable.InlineHead label="Валют" />,
+    cell: AccountCurrencyCell,
+    size: 240,
+  },
+  {
+    id: 'kind',
+    accessorKey: 'kind',
+    header: () => <RecordTable.InlineHead label="Төрөл" />,
+    cell: ({ cell }) => {
+      return (
+        <RecordTableInlineCell>
+          {cell.getValue() as string}
+        </RecordTableInlineCell>
+      );
+    },
+  },
+  {
+    id: 'journal',
+    accessorKey: 'journal',
+    header: () => <RecordTable.InlineHead label="Журнал" />,
+    cell: ({ cell }) => {
+      return (
+        <RecordTableInlineCell>
+          {JOURNAL_LABELS[cell.getValue() as JournalEnum]}
+        </RecordTableInlineCell>
+      );
+    },
+  },
+  {
+    id: 'isTemp',
+    accessorKey: 'isTemp',
+    header: () => <RecordTable.InlineHead label="Түр" />,
+    size: 80,
+    cell: ({ cell }) => {
+      return (
+        <RecordTableInlineCell>
+          {cell.getValue() ? 'temp' : '-'}
+        </RecordTableInlineCell>
+      );
+    },
+  },
+  {
+    id: 'isOutBalance',
+    accessorKey: 'isOutBalance',
+    header: () => <RecordTable.InlineHead label="Баланс бус" />,
+    size: 80,
+    cell: ({ cell }) => {
+      return (
+        <RecordTableInlineCell>
+          {cell.getValue() ? 'Баланс бус' : '-'}
+        </RecordTableInlineCell>
+      );
+    },
+  },
+];

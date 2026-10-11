@@ -1,0 +1,181 @@
+import { useState } from 'react';
+import {
+  Button,
+  cn,
+  Command,
+  Input,
+  REACT_APP_API_URL,
+  RadioGroup,
+  Spinner,
+} from 'erxes-ui';
+import { useFacebookAccounts } from '../hooks/useFacebookAccounts';
+import { IconBrandFacebook } from '@tabler/icons-react';
+import { useAtom, useSetAtom } from 'jotai';
+import {
+  activeFacebookFormStepAtom,
+  selectedFacebookAccountAtom,
+} from '../states/facebookStates';
+import {
+  FacebookIntegrationFormLayout,
+  FacebookIntegrationFormSteps,
+} from './FacebookIntegrationForm';
+import { useFacebookPages } from '../hooks/useFacebookPages';
+import { useFbAuthPopup } from '../hooks/useFbAuthPopup';
+
+
+const FacebookAccountRow = ({
+  account,
+  selectedAccount,
+  onSelect,
+}: {
+  account: { _id: string; name: string };
+  selectedAccount: string | undefined;
+  onSelect: (id: string) => void;
+}) => {
+  const { facebookGetPages, loading: pagesLoading } = useFacebookPages(account._id);
+  return (
+    <Command.Item
+      key={account._id}
+      value={account._id}
+      onSelect={() => onSelect(account._id)}
+      className={cn(
+        'gap-3 border-t last-of-type:border-b rounded-none h-10 px-3',
+        selectedAccount === account._id && 'text-primary',
+      )}
+    >
+      <RadioGroup.Item
+        value={account._id}
+        checked={selectedAccount === account._id}
+        className="bg-background"
+        onClick={() => onSelect(account._id)}
+      />
+      <div className="font-semibold">{account.name}</div>
+      <div className="text-sm text-muted-foreground font-mono uppercase ml-auto">
+        {pagesLoading ? (
+          <Spinner className="w-3 h-3" />
+        ) : (
+          `${facebookGetPages.length} pages`
+        )}
+      </div>
+    </Command.Item>
+  );
+};
+
+export const FacebookGetAccounts = () => {
+  const { facebookGetAccounts, loading, refetch } = useFacebookAccounts();
+  const [selectedAccount, setSelectedAccount] = useAtom(
+    selectedFacebookAccountAtom,
+  );
+  const setActiveStep = useSetAtom(activeFacebookFormStepAtom);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const { popupWindow } = useFbAuthPopup(() => {
+    refetch();
+    setIsLoggingIn(false);
+  });
+
+  const handleFacebookLogin = () => {
+    setIsLoggingIn(true);
+    popupWindow(
+      `${REACT_APP_API_URL}/pl:frontline/facebook/fblogin`,
+      'Facebook Login',
+      660,
+      750,
+    );
+  };
+
+  const onNext = () => setActiveStep(2);
+
+  const filteredAccounts = facebookGetAccounts.filter((account) =>
+    account.name.toLowerCase().includes(searchTerm.toLowerCase()),
+  );
+
+  return (
+    <FacebookIntegrationFormLayout
+      actions={
+        <>
+          <Button variant="secondary" className="bg-border" disabled>
+            Previous step
+          </Button>
+          <Button onClick={onNext} disabled={!selectedAccount}>
+            Next step
+          </Button>
+        </>
+      }
+    >
+      <FacebookIntegrationFormSteps
+        title="Connect accounts"
+        step={1}
+        description="Select the accounts where you want to integrate its pages with."
+      />
+
+      <div className="flex-1 overflow-hidden p-4 pt-0 flex flex-col">
+        <Command className="flex-1">
+          <div className="p-1">
+            <Command.Primitive.Input asChild>
+              <Input
+                placeholder="Search for an account"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </Command.Primitive.Input>
+          </div>
+
+          <div className="flex justify-between items-center px-1 py-2">
+            <div className="text-sm text-muted-foreground flex items-center gap-2">
+              {loading ? (
+                <>
+                  <Spinner className="w-3 h-3" />
+                  Loading accounts...
+                </>
+              ) : (
+                `${filteredAccounts.length} accounts found`
+              )}
+            </div>
+
+            <Button
+              variant="outline"
+              className="border-blue-200 text-blue-600 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all duration-200 font-medium"
+              onClick={handleFacebookLogin}
+              disabled={isLoggingIn}
+            >
+              {isLoggingIn ? (
+                <>
+                  <Spinner className="w-4 h-4 mr-2" />
+                  Connecting to Facebook...
+                </>
+              ) : (
+                <>
+                  <IconBrandFacebook className="w-4 h-4 mr-2 text-blue-600" />
+                  Connect Facebook Account
+                </>
+              )}
+            </Button>
+          </div>
+
+          <RadioGroup
+            value={selectedAccount}
+            onValueChange={(value) =>
+              setSelectedAccount(selectedAccount === value ? undefined : value)
+            }
+            className="flex-1 overflow-hidden"
+          >
+            <Command.List className="max-h-none overflow-y-auto">
+              {filteredAccounts.map((account) => (
+                <FacebookAccountRow
+                  key={account._id}
+                  account={account}
+                  selectedAccount={selectedAccount}
+                  onSelect={(id) =>
+                    setSelectedAccount(selectedAccount === id ? undefined : id)
+                  }
+                />
+              ))}
+            </Command.List>
+          </RadioGroup>
+        </Command>
+      </div>
+    </FacebookIntegrationFormLayout>
+  );
+};

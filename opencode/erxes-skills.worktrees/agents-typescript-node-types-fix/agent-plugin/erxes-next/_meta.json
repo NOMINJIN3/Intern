@@ -1,0 +1,126 @@
+{
+  "ownerId": "kn7fcjad721dqasge0s8tk714s85632x",
+  "slug": "erxes-next-plugin",
+  "name": "erxes-next-plugin",
+  "type": "agent-plugin",
+  "version": "1.0.22",
+  "entry": "instructions.md",
+  "publishedAt": 1776750733646,
+  "description": "Confidential OAuth plugin for operating erxes data through GraphQL with strict anti-hallucination rules.",
+  "requiredEnv": [
+    {
+      "label": "erxes gateway URL",
+      "required": true,
+      "secret": false,
+      "description": "Gateway URL, for example https://your-subdomain.next.erxes.io/gateway or http://localhost:4000",
+      "key": "ERXES_BASE_URL"
+    },
+    {
+      "label": "OAuth confidential client ID",
+      "required": true,
+      "secret": false,
+      "description": "Client ID from erxes Settings > OAuth Clients",
+      "key": "ERXES_CLIENT_ID"
+    },
+    {
+      "label": "OAuth confidential client secret",
+      "required": true,
+      "secret": true,
+      "description": "Secret shown once when creating a confidential OAuth client",
+      "key": "ERXES_CLIENT_SECRET"
+    },
+    {
+      "label": "OAuth session persistence duration",
+      "required": false,
+      "secret": false,
+      "description": "How long a saved OAuth session stays valid before re-login is required: 3m, 6m, or 1y. Default 6m.",
+      "key": "ERXES_AUTH_DURATION"
+    }
+  ],
+  "matches": {
+    "keywords": [
+      "erxes",
+      "erxes-plugin",
+      "erxes-next",
+      "xos",
+      "contacts",
+      "companies",
+      "products",
+      "automations",
+      "block",
+      "operation",
+      "graphql",
+      "oauth"
+    ],
+    "intents": [
+      "read erxes data",
+      "create erxes record",
+      "update erxes record",
+      "delete erxes record",
+      "group erxes records",
+      "diagnose erxes oauth",
+      "operate block plugin",
+      "operate operation plugin"
+    ]
+  },
+  "auth": {
+    "type": "oauth-device-flow",
+    "clientType": "confidential",
+    "baseUrlEnv": "ERXES_BASE_URL",
+    "clientIdEnv": "ERXES_CLIENT_ID",
+    "clientSecretEnv": "ERXES_CLIENT_SECRET",
+    "clientSecretHeader": "oauth_secret",
+    "expectedAccessTokenExpiresIn": 28800,
+    "persistence": {
+      "store": "openclaw-runtime-state-dir",
+      "manager": "scripts/erxes-auth.mjs",
+      "durationOptions": [
+        "3m",
+        "6m",
+        "1y"
+      ],
+      "defaultDuration": "6m",
+      "secretsInRepo": false
+    }
+  },
+  "files": {
+    "instructions": "instructions.md",
+    "auth": "erxes-app-token-auth.md",
+    "graphql": "erxes-graphql-api.md",
+    "block": "block-api.md",
+    "operation": "operation-api.md",
+    "loginScript": "scripts/login.sh",
+    "refreshScript": "scripts/refresh-token.sh",
+    "authManager": "scripts/erxes-auth.mjs"
+  },
+  "displayName": "erxes-plugin",
+  "id": "erxes-next-plugin",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "erxesBaseUrl": {
+        "type": "string",
+        "description": "erxes gateway URL, for example https://your-subdomain.next.erxes.io/gateway or http://localhost:4000"
+      },
+      "clientId": {
+        "type": "string",
+        "description": "Confidential OAuth client ID from erxes Settings > OAuth Clients"
+      },
+      "clientSecret": {
+        "type": "string",
+        "description": "Confidential OAuth client secret shown once when creating the client"
+      },
+      "authDuration": {
+        "type": "string",
+        "enum": [
+          "3m",
+          "6m",
+          "1y"
+        ],
+        "default": "6m",
+        "description": "How long the persisted OAuth session stays valid before the user must OAuth again."
+      }
+    }
+  }
+}

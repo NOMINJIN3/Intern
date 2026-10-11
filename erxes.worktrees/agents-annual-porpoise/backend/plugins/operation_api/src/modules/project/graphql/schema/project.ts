@@ -1,0 +1,101 @@
+import { GQL_CURSOR_PARAM_DEFS } from 'erxes-api-shared/utils';
+
+export const types = `
+type Project {
+    _id: String
+    name: String
+    icon: String
+    description: String
+    status: Int
+    priority: Int
+    teamIds: [String]!
+    tagIds: [String]
+    leadId: String
+    memberIds: [String]
+    startDate: Date
+    targetDate: Date
+    createdBy: String
+    createdAt: Date
+    updatedAt: Date
+    convertedFromId: String
+}
+
+
+type ProjectListResponse {
+    list: [Project],
+    pageInfo: PageInfo
+    totalCount: Int,
+}
+
+input IProjectFilter {
+    _id: String
+    _ids: [String]
+    name: String
+    description: String
+    status: Int
+    priority: Int
+    teamIds: [String]
+    tagIds: [String]
+    leadId: String
+    memberIds: [String]
+    memberId: String
+    startDate: Date
+    targetDate: Date
+    userId: String
+    active: Boolean
+    taskId: String
+    ${GQL_CURSOR_PARAM_DEFS}
+}
+
+type ProjectSubscription {
+    type: String
+    project: Project
+}
+`;
+
+const createProjectParams = `
+  name: String!
+  leadId: String
+  memberIds: [String]
+  icon: String
+  description: String
+  status: Int
+  priority: Int
+  teamIds: [String!]!
+  tagIds: [String]
+  startDate: Date
+  targetDate: Date
+  convertedFromId: String
+`;
+
+const updateProjectParams = `
+  _id: String!
+  name: String
+  leadId: String
+  memberIds: [String]
+  icon: String
+  description: String
+  status: Int
+  priority: Int
+  teamIds: [String]
+  tagIds: [String]
+  startDate: Date
+  targetDate: Date
+`;
+
+export const queries = `
+    getProject(_id: String!): Project
+    getProjects(filter: IProjectFilter): ProjectListResponse
+    getProjectProgress(_id: String!): JSON
+    getProjectProgressByMember(_id: String!): JSON
+    getProjectProgressByTeam(_id: String!): JSON
+    getProjectProgressChart(_id: String!): JSON
+    getConvertedProject(convertedFromId: String): Project
+    cpGetProjects: [Project]
+`;
+
+export const mutations = `
+  createProject(${createProjectParams}): Project
+  updateProject(${updateProjectParams}): Project
+  removeProject(_id: String!): JSON
+`;

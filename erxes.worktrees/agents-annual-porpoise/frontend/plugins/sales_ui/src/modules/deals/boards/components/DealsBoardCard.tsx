@@ -1,0 +1,338 @@
+import { Labels } from '@/deals/cards/components/detail/overview/label/Labels';
+import { ItemFooter } from '@/deals/cards/components/item/Footer';
+import { useDealsEdit } from '@/deals/cards/hooks/useDeals';
+import { SelectLabels } from '@/deals/components/common/filters/SelectLabel';
+import { DateSelectDeal } from '@/deals/components/deal-selects/DateSelectDeal';
+import { SelectDealPriority } from '@/deals/components/deal-selects/SelectDealPriority';
+import { dealDetailSheetState } from '@/deals/states/dealDetailSheetState';
+import { IDeal } from '@/deals/types/deals';
+import { IconAlertCircleFilled } from '@tabler/icons-react';
+import { CopyText, Separator, useQueryState } from 'erxes-ui';
+import { useSetAtom } from 'jotai';
+import { memo, useState } from 'react';
+import {
+  SelectCompanyFilterBar,
+  SelectCustomerFilterBar,
+} from 'ui-modules/modules/contacts';
+import { SelectTagsFilterBar } from 'ui-modules/modules/tags';
+import { useManageRelations } from 'ui-modules';
+import type { IProductData } from 'ui-modules';
+import { DealCardDetails } from './DealsBoardCardDetails';
+
+interface DealsBoardCardProps {
+  deal: IDeal;
+}
+
+const normalizeSelectedIds = (value?: string | string[]) => {
+  if (!value) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+};
+
+const CardDetails = ({ deal }: { deal: IDeal }) => {
+  const { companies, customers, tags, customProperties } = deal;
+
+  const productMap = new Map(deal.products?.map((p) => [p._id, p]));
+
+  const filterProducts = (tickUsed: boolean) =>
+    deal.productsData
+      ?.filter((p) => p.tickUsed === tickUsed)
+      .map((p) => {
+        const product = productMap.get(p.productId || '');
+        if (!product) return null;
+
+        return {
+          _id: product._id,
+          product: product.product,
+          name: product.name,
+          quantity: p.quantity,
+          uom: p.uom,
+          unitPrice: p.unitPrice,
+        };
+      })
+      .filter((p): p is NonNullable<typeof p> => p !== null) || [];
+
+  const dealProducts = filterProducts(true);
+  const excludedProducts = filterProducts(false);
+
+  const computeTotals = (items: IProductData[]) => {
+    const totals: Record<string, number> = {};
+    items.forEach((p) => {
+      const currency = p.currency || '';
+      totals[currency] = (totals[currency] || 0) + (p.amount || 0);
+    });
+    return totals;
+  };
+
+  const usedTotals = computeTotals(
+    deal.productsData?.filter((p) => p.tickUsed !== false) || [],
+  );
+  const unusedTotals = computeTotals(
+    deal.productsData?.filter((p) => p.tickUsed === false) || [],
+  );
+
+  const hasProducts = dealProducts.length > 0 || excludedProducts.length > 0;
+
+  if (
+    !hasProducts &&
+    !companies?.length &&
+    !customers?.length &&
+    !tags?.length &&
+    !customProperties?.length
+  ) {
+    return null;
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5 p-3 pt-0">
+      <DealCardDetails items={companies} color="#EA475D" separated />
+      <DealCardDetails items={customers} color="#F7CE53" separated />
+      <DealCardDetails items={dealProducts} color="#63D2D6" separated />
+      <DealCardDetails items={excludedProducts} color="#b49cf1" separated />
+      <DealCardDetails items={tags || []} color="#FF6600" separated />
+      <DealCardDetails
+        items={customProperties || []}
+        color="#FF9900"
+        separated
+      />
+      {hasProducts && (
+        <div className="flex flex-col gap-0.5 pt-0.5">
+          {Object.entries(usedTotals).map(([currency, total]) => (
+            <div
+              key={currency}
+              className="flex justify-between text-xs font-semibold"
+            >
+              <span className="text-muted-foreground">Total</span>
+              <span>
+                {total.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {currency && (
+                  <span className="text-muted-foreground ml-1 text-[10px]">
+                    {currency}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+          {Object.entries(unusedTotals).map(([currency, total]) => (
+            <div
+              key={currency}
+              className="flex justify-between text-xs opacity-60"
+            >
+              <span className="text-muted-foreground">Unused</span>
+              <span>
+                {total.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                {currency && (
+                  <span className="text-muted-foreground ml-1 text-[10px]">
+                    {currency}
+                  </span>
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+export const DealsBoardCard = memo(function DealsBoardCard({
+  deal,
+}: DealsBoardCardProps) {
+  const [, setSalesItemId] = useQueryState<string>('salesItemId');
+  const setActiveDealAtom = useSetAtom(dealDetailSheetState);
+  const [searchParams] = useQueryState<string>('archivedOnly');
+  const { editDeals } = useDealsEdit();
+  const { manageRelations } = useManageRelations();
+  const [currentCustomers, setCurrentCustomers] = useState(
+    deal.customers || [],
+  );
+  const [currentCompanies, setCurrentCompanies] = useState(
+    deal.companies || [],
+  );
+
+  if (!deal) return null;
+
+  const {
+    startDate,
+    name,
+    number,
+    assignedUsers,
+    _id,
+    priority,
+    createdAt,
+    closeDate,
+    labels,
+    status,
+    stage,
+    tagIds,
+  } = deal;
+  const onCardClick = () => {
+    setSalesItemId(_id);
+    setActiveDealAtom(_id);
+  };
+  const archivedOnly = searchParams === 'true';
+  const isArchived = status === 'archived';
+  const showArchivedBadge = archivedOnly || isArchived;
+
+  return (
+    <div
+      className={showArchivedBadge ? 'relative overflow-hidden' : ''}
+      onClick={() => onCardClick()}
+    >
+      <div className="flex items-center justify-between h-9 px-1.5">
+        <DateSelectDeal
+          placeholder="Start Date"
+          value={startDate}
+          id={_id}
+          type="startDate"
+          variant="card"
+        />
+        <DateSelectDeal
+          placeholder="Close Date"
+          value={closeDate}
+          id={_id}
+          type="closeDate"
+          variant="card"
+        />
+      </div>
+      <Separator />
+      <div className="p-3 flex flex-col gap-3">
+        {labels && labels.length !== 0 && (
+          <div className="flex flex-wrap items-center gap-2">
+            <Labels labels={labels} type="toggle" />
+          </div>
+        )}
+        <div className="flex flex-col gap-1">
+          <h5 className="font-semibold">
+            <CopyText value={name || ''} className="hover:opacity-70 text-left">
+              {name}
+            </CopyText>
+          </h5>
+          {stage?.age !== undefined && stage.age < 0 && (
+            <span className="px-2 rounded flex gap-1 bg-yellow-50 text-yellow-400 border-yellow-100 border">
+              <IconAlertCircleFilled className="size-6 pt-2" />
+              <h5 className="text-sm py-2">
+                Ready to move this card to the next column? (
+                {Math.abs(stage.age)}{' '}
+                {Math.abs(stage.age) === 1 ? 'day' : 'days'} elapsed)
+              </h5>
+            </span>
+          )}
+        </div>
+        <div className="flex flex-wrap gap-1">
+          <SelectDealPriority
+            dealId={_id}
+            value={priority || ''}
+            variant="card"
+          />
+          <SelectLabels.FilterBar
+            filterKey=""
+            mode="multiple"
+            label="By Label"
+            variant="card"
+            targetId={_id}
+            initialValue={labels?.map((label) => label._id || '') || []}
+            showLabels
+          />
+          <SelectTagsFilterBar
+            filterKey=""
+            mode="multiple"
+            label="By Tag"
+            variant="card"
+            targetId={_id}
+            tagType="sales:deal"
+            initialValue={tagIds || []}
+            onValueChange={(value) => {
+              if (!value) return;
+              editDeals({
+                variables: {
+                  _id: deal._id,
+                  tagIds: Array.isArray(value) ? value : [value],
+                },
+              });
+            }}
+          />
+          <SelectCustomerFilterBar
+            filterKey=""
+            mode="multiple"
+            label="By Customer"
+            variant="card"
+            targetId={_id}
+            initialValue={
+              currentCustomers?.map((customer) => customer._id || '') || []
+            }
+            value={
+              currentCustomers?.map((customer) => customer._id || '') || []
+            }
+            onValueChange={(value?: string | string[]) => {
+              const selectedIds = normalizeSelectedIds(value);
+
+              if (!selectedIds.length) return;
+
+              const updatedCustomers = selectedIds.map(
+                (id: string) =>
+                  currentCustomers?.find((c) => c._id === id) || { _id: id },
+              );
+              setCurrentCustomers(updatedCustomers);
+
+              manageRelations({
+                contentType: 'sales:deal',
+                contentId: _id,
+                relatedContentType: 'core:customer',
+                relatedContentIds: selectedIds,
+              });
+            }}
+            hideAvatar
+          />
+          <SelectCompanyFilterBar
+            filterKey=""
+            mode="multiple"
+            label="By Company"
+            variant="card"
+            targetId={_id}
+            initialValue={
+              currentCompanies?.map((company) => company._id || '') || []
+            }
+            value={currentCompanies?.map((company) => company._id || '') || []}
+            onValueChange={(value?: string | string[]) => {
+              const selectedIds = normalizeSelectedIds(value);
+
+              if (!selectedIds.length) return;
+
+              const updatedCompanies = selectedIds.map(
+                (id: string) =>
+                  currentCompanies?.find((c) => c._id === id) || { _id: id },
+              );
+              setCurrentCompanies(updatedCompanies);
+
+              manageRelations({
+                contentType: 'sales:deal',
+                contentId: _id,
+                relatedContentType: 'core:company',
+                relatedContentIds: selectedIds,
+              });
+            }}
+            hideAvatar
+          />
+        </div>
+      </div>
+      <CardDetails deal={deal} />
+      <Separator />
+      <ItemFooter
+        number={number}
+        createdAt={createdAt}
+        assignedUsers={assignedUsers || []}
+        id={_id}
+      />{' '}
+      {showArchivedBadge && (
+        <div className="pointer-events-none select-none absolute bottom-6 -right-10 -rotate-45 w-40">
+          <span className="block w-full text-center px-8 py-1 text-xs font-semibold bg-yellow-100 text-yellow-800 border-t border-b border-yellow-200 ">
+            Archived
+          </span>
+        </div>
+      )}
+    </div>
+  );
+});

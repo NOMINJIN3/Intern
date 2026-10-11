@@ -1,0 +1,290 @@
+import { SelectPriority } from '@/operation/components/SelectPriority';
+import { SelectStatus } from '@/operation/components/SelectStatus';
+import { DateSelect, SelectLead } from '@/project/components/select';
+import { useCreateProject } from '@/project/hooks/useCreateProject';
+import { TAddProject, addProjectSchema } from '@/project/types';
+import { ITask } from '@/task/types';
+import { SelectTeam } from '@/team/components/SelectTeam';
+import { useGetCurrentUsersTeams } from '@/team/hooks/useGetCurrentUsersTeams';
+import { Block } from '@blocknote/core';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { IconChevronRight } from '@tabler/icons-react';
+import {
+  BlockEditor,
+  Button,
+  Form,
+  IconPicker,
+  Input,
+  Separator,
+  Sheet,
+  useBlockEditor,
+} from 'erxes-ui';
+import { useEffect, useState } from 'react';
+import { useForm } from 'react-hook-form';
+import { useNavigate, useParams } from 'react-router-dom';
+import { SelectMember, SelectTags } from 'ui-modules';
+
+export const AddProjectForm = ({
+  onClose,
+  onComplete,
+  task,
+}: {
+  onClose: () => void;
+  onComplete?: (projectId: string) => void;
+  task?: ITask;
+}) => {
+  const navigate = useNavigate();
+  const { teamId } = useParams();
+  const { createProject } = useCreateProject();
+  const editor = useBlockEditor();
+  const [descriptionContent, setDescriptionContent] = useState<Block[]>();
+  const form = useForm<TAddProject>({
+    resolver: zodResolver(addProjectSchema),
+    defaultValues: {
+      teamIds: teamId ? [teamId] : [],
+      icon: 'IconBox',
+      name: task?.name || '',
+      status: 2,
+      priority: task?.priority || 0,
+      leadId: task?.assigneeId || undefined,
+      memberIds: [] as string[],
+      targetDate: task?.targetDate ? new Date(task?.targetDate) : undefined,
+      convertedFromId: task?._id,
+      tagIds: [] as string[],
+    },
+  });
+  useEffect(() => {
+    form.setFocus('name');
+  }, []);
+
+  const { teams } = useGetCurrentUsersTeams({
+    skip: !!teamId,
+  });
+
+  useEffect(() => {
+    if (!teamId && teams && teams?.length > 0) {
+      form.setValue('teamIds', [teams[0]._id]);
+    }
+  }, [form, teams, teamId]);
+
+  const handleDescriptionChange = async () => {
+    const content = await editor?.document;
+    if (content) {
+      content.pop();
+      setDescriptionContent(content as Block[]);
+    }
+  };
+
+  const onSubmit = async (data: TAddProject) => {
+    const project = await createProject({
+      variables: {
+        ...data,
+        description: JSON.stringify(descriptionContent),
+      },
+    });
+
+    if (project?.data?.createProject?.convertedFromId) {
+      navigate(
+        `/operation/projects/${project?.data?.createProject._id}/overview`,
+      );
+    }
+
+    const projectId = project?.data?.createProject?._id;
+    if (projectId) onComplete?.(projectId);
+    onClose();
+  };
+
+  return (
+    <Form {...form}>
+      <form
+        onSubmit={form.handleSubmit(onSubmit)}
+        className="h-full flex flex-col"
+      >
+        <Sheet.Header className="flex items-center gap-2 ">
+          <Form.Field
+            name="teamIds"
+            control={form.control}
+            render={({ field }) => (
+              <Form.Item className="space-y-0">
+                <Form.Label className="sr-only">Team</Form.Label>
+                <SelectTeam.FormItem
+                  value={field.value}
+                  onValueChange={field.onChange}
+                />
+              </Form.Item>
+            )}
+          />
+          <IconChevronRight className="size-4" />
+          <Sheet.Title className="">New project</Sheet.Title>
+        </Sheet.Header>
+        <Sheet.Content className="px-7 py-4 gap-2 flex flex-col min-h-0">
+          <Form.Field
+            control={form.control}
+            name="icon"
+            render={({ field }) => (
+              <Form.Item>
+                <Form.Label className="sr-only">Icon</Form.Label>
+                <Form.Control>
+                  <IconPicker
+                    onValueChange={field.onChange}
+                    value={field.value}
+                    variant="secondary"
+                    size="icon"
+                    className="w-min p-2"
+                  />
+                </Form.Control>
+              </Form.Item>
+            )}
+          />
+          <Form.Field
+            name="name"
+            control={form.control}
+            render={({ field }) => (
+              <Form.Item>
+                <Form.Label className="sr-only">Name</Form.Label>
+                <Form.Control>
+                  <Input
+                    {...field}
+                    className="shadow-none focus-visible:shadow-none h-8 text-xl p-0"
+                    placeholder="Project Name"
+                  />
+                </Form.Control>
+              </Form.Item>
+            )}
+          />
+          <div className="gap-2 flex flex-wrap w-full">
+            <Form.Field
+              name="status"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Status</Form.Label>
+                  <SelectStatus.FormItem
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  />
+                </Form.Item>
+              )}
+            />
+            <Form.Field
+              name="priority"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Priority</Form.Label>
+                  <SelectPriority.FormItem
+                    value={field.value}
+                    onValueChange={field.onChange}
+                  />
+                </Form.Item>
+              )}
+            />
+            <Form.Field
+              name="leadId"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Lead</Form.Label>
+                  <SelectLead.FormItem
+                    {...field}
+                    value={field.value}
+                    onValueChange={(value: any) => {
+                      field.onChange(value);
+                    }}
+                    teamIds={form.getValues('teamIds')}
+                  />
+                </Form.Item>
+              )}
+            />
+            <Form.Field
+              name="memberIds"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Members</Form.Label>
+                  <SelectMember.FormItem
+                    value={field.value}
+                    onValueChange={field.onChange}
+                    mode="multiple"
+                  />
+                </Form.Item>
+              )}
+            />
+            <Form.Field
+              name="startDate"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Start Date</Form.Label>
+                  <DateSelect.FormItem
+                    {...field}
+                    type="start"
+                    placeholder="Start Date"
+                  />
+                </Form.Item>
+              )}
+            />
+            <Form.Field
+              name="targetDate"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Target Date</Form.Label>
+                  <DateSelect.FormItem
+                    {...field}
+                    type="target"
+                    placeholder="Target Date"
+                  />
+                </Form.Item>
+              )}
+            />
+            <Form.Field
+              name="tagIds"
+              control={form.control}
+              render={({ field }) => (
+                <Form.Item className="shrink-0">
+                  <Form.Label className="sr-only">Tags</Form.Label>
+                  <SelectTags.FormItem
+                    tagType="operation:project"
+                    mode="multiple"
+                    value={field.value || []}
+                    onValueChange={(value) => field.onChange(value)}
+                  />
+                </Form.Item>
+              )}
+            />
+          </div>
+          <Separator className="my-4" />
+          <div className="flex-1 overflow-y-auto">
+            <BlockEditor
+              editor={editor}
+              onChange={handleDescriptionChange}
+              className="read-only min-h-full"
+            />
+          </div>
+        </Sheet.Content>
+        <Sheet.Footer className="flex justify-end shrink-0 gap-1 px-5">
+          <Button
+            type="button"
+            variant="ghost"
+            className="bg-background hover:bg-background/90"
+            onClick={() => {
+              onClose();
+              form.reset();
+              editor?.removeBlocks(editor?.document);
+              setDescriptionContent(undefined);
+            }}
+          >
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+          >
+            Save
+          </Button>
+        </Sheet.Footer>
+      </form>
+    </Form>
+  );
+};

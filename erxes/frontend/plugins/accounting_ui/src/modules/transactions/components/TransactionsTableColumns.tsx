@@ -1,0 +1,322 @@
+import {
+  IconCalendar,
+  IconEdit,
+  IconFile,
+  IconMoneybag,
+  IconTrash,
+} from '@tabler/icons-react';
+import { Cell, ColumnDef } from '@tanstack/react-table';
+import dayjs from 'dayjs';
+import {
+  Combobox,
+  Command,
+  CurrencyCode,
+  CurrencyFormatedDisplay,
+  Input,
+  Popover,
+  PopoverScoped,
+  RecordTable,
+  RecordTableInlineCell,
+  useConfirm,
+} from 'erxes-ui';
+import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { useTransactionsRemove } from '../transaction-form/hooks/useTransactionsRemove';
+import { TR_JOURNAL_LABELS, TR_STATUS_LABELS, TrJournalEnum } from '../types/constants';
+import { ITransaction } from '../types/Transaction';
+
+// Create named components for cell renderers to fix React Hook usage
+const NumberCell = ({ getValue, row }: any) => {
+  const [number, setNumber] = useState(getValue() as string);
+  const { _id } = row.original;
+
+  return (
+    <PopoverScoped scope={`accounting-${_id}-number`}>
+      <RecordTableInlineCell.Trigger>
+        {getValue() as string}
+      </RecordTableInlineCell.Trigger>
+      <RecordTableInlineCell.Content>
+        <Input
+          value={number}
+          onChange={(e) => setNumber(e.target.value)}
+          className="w-full"
+        />
+      </RecordTableInlineCell.Content>
+    </PopoverScoped>
+  );
+};
+
+const DescriptionCell = ({ getValue, row }: any) => {
+  const [description, setDescription] = useState(getValue() as string);
+  const { _id } = row.original;
+
+  return (
+    <PopoverScoped scope={`accounting-${_id}-description`}>
+      <RecordTableInlineCell.Trigger>
+        {getValue() as string}
+      </RecordTableInlineCell.Trigger>
+      <RecordTableInlineCell.Content>
+        <Input
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          className="w-full"
+        />
+      </RecordTableInlineCell.Content>
+    </PopoverScoped>
+  );
+};
+
+const StatusCell = ({ row }: any) => {
+  const { status } = row.original;
+
+  return (
+    <RecordTableInlineCell>
+      {TR_STATUS_LABELS[status] || status}
+    </RecordTableInlineCell>
+  );
+};
+
+const JournalCell = ({ row }: any) => {
+  const { journal } = row.original;
+
+  return (
+    <RecordTableInlineCell>
+      {TR_JOURNAL_LABELS[journal as TrJournalEnum] || 'Main'}
+    </RecordTableInlineCell>
+  );
+};
+
+const SumDebitCell = ({ getValue, row }: any) => {
+  const sumDt = getValue() as number;
+  const { _id } = row.original;
+
+  return (
+    <PopoverScoped scope={`accounting-${_id}-sumDt`}>
+      <RecordTableInlineCell.Trigger>
+        <CurrencyFormatedDisplay
+          currencyValue={{
+            currencyCode: CurrencyCode.MNT,
+            amountMicros: sumDt,
+          }}
+        />
+      </RecordTableInlineCell.Trigger>
+    </PopoverScoped>
+  );
+};
+
+const SumCreditCell = ({ getValue, row }: any) => {
+  const sumCt = getValue() as number;
+  const { _id } = row.original;
+
+  return (
+    <PopoverScoped scope={`accounting-${_id}-sumCt`}>
+      <RecordTableInlineCell.Trigger>
+        <CurrencyFormatedDisplay
+          currencyValue={{
+            currencyCode: CurrencyCode.MNT,
+            amountMicros: sumCt,
+          }}
+        />
+      </RecordTableInlineCell.Trigger>
+    </PopoverScoped>
+  );
+};
+
+const BranchCell = ({ row }: any) => {
+  const { branch } = row.original;
+
+  return (
+    <RecordTableInlineCell>
+      {[branch?.code, branch?.title].filter(Boolean).join(' - ')}
+    </RecordTableInlineCell>
+  );
+};
+
+const DepartmentCell = ({ row }: any) => {
+  const { department } = row.original;
+
+  return (
+    <RecordTableInlineCell>
+      {[department?.code, department?.title].filter(Boolean).join(' - ')}
+    </RecordTableInlineCell>
+  );
+};
+
+const DateCell = ({ getValue }: any) => {
+  return (
+    <RecordTableInlineCell>
+      {dayjs(new Date(getValue())).format('YYYY-MM-DD')}
+    </RecordTableInlineCell>
+  );
+};
+
+const AccountCell = ({ row }: any) => {
+  const { details, parentId, _id, originId } = row.original;
+  const navigate = useNavigate();
+
+  const name0 = details[0].account?.name;
+
+  const infoByCode = details.reduce(
+    (acc: { [code: string]: number }, d: any) => {
+      const code = d.account?.code || '';
+      acc[code] = (acc[code] || 0) + 1;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  const codes = Object.keys(infoByCode);
+
+  const handleEditAccount = () => {
+    navigate(
+      `/accounting/transaction/edit?parentId=${parentId}&trId=${originId || _id
+      }`,
+    );
+  };
+
+  return (
+    <RecordTableInlineCell onClick={handleEditAccount} className="cursor-pointer">
+      {codes.map((code, i) => {
+        const count = infoByCode[code];
+        const tot = count > 1 ? `(${count})` : '';
+
+        if (i === 0) {
+          return `${code} - ${name0}${tot}`;
+        }
+
+        return `, ${code}${tot}`;
+      })}
+    </RecordTableInlineCell>
+  );
+};
+
+const TransactionMoreColumnCell = ({
+  cell,
+}: {
+  cell: Cell<ITransaction, unknown>;
+}) => {
+  const { parentId, _id, originId } = cell.row.original;
+  const navigate = useNavigate();
+  const { confirm } = useConfirm();
+  const { removeTransactions } = useTransactionsRemove();
+  const handleEditAcc = () => {
+    navigate(
+      `/accounting/transaction/edit?parentId=${parentId}&trId=${originId || _id
+      }`,
+    );
+  };
+  const handleDelete = () =>
+    confirm({
+      message: 'Are you sure you want to delete these transactions?',
+      options: {
+        okLabel: 'Delete',
+        cancelLabel: 'Cancel',
+      },
+    }).then(() => {
+      removeTransactions(parentId);
+    });
+
+  return (
+    <Popover>
+      <Popover.Trigger asChild>
+        <RecordTable.MoreButton className="w-full h-full" />
+      </Popover.Trigger>
+      <Combobox.Content>
+        <Command shouldFilter={false}>
+          <Command.List>
+            <Command.Item value="edit" onSelect={handleEditAcc}>
+              <IconEdit /> Edit
+            </Command.Item>
+            <Command.Item value="delete" onSelect={handleDelete}>
+              <IconTrash /> Delete
+            </Command.Item>
+          </Command.List>
+        </Command>
+      </Combobox.Content>
+    </Popover>
+  );
+};
+
+const transactionMoreColumn = {
+  id: 'more',
+  cell: TransactionMoreColumnCell,
+  size: 33,
+};
+
+export const transactionColumns: ColumnDef<ITransaction>[] = [
+  transactionMoreColumn,
+  RecordTable.checkboxColumn as ColumnDef<ITransaction>,
+  {
+    id: 'account',
+    header: () => <RecordTable.InlineHead icon={IconMoneybag} label="Данс" />,
+    accessorKey: 'details',
+    cell: ({ row }) => <AccountCell row={row} />,
+    size: 300,
+  },
+  {
+    id: 'number',
+    header: () => <RecordTable.InlineHead icon={IconFile} label="Дугаар" />,
+    accessorKey: 'number',
+    cell: ({ getValue, row }) => <NumberCell getValue={getValue} row={row} />,
+  },
+  {
+    id: 'date',
+    header: () => <RecordTable.InlineHead icon={IconCalendar} label="Огноо" />,
+    accessorKey: 'date',
+    cell: ({ getValue, row }) => <DateCell getValue={getValue} row={row} />,
+    size: 100,
+  },
+  {
+    id: 'description',
+    header: () => <RecordTable.InlineHead icon={IconFile} label="Тайлбар" />,
+    accessorKey: 'description',
+    cell: ({ getValue, row }) => (
+      <DescriptionCell getValue={getValue} row={row} />
+    ),
+    size: 200,
+  },
+  {
+    id: 'status',
+    header: () => <RecordTable.InlineHead icon={IconFile} label="Төлөв" />,
+    accessorKey: 'status',
+    cell: ({ row }) => <StatusCell row={row} />,
+  },
+  {
+    id: 'journal',
+    header: () => <RecordTable.InlineHead icon={IconFile} label="Журнал" />,
+    accessorKey: 'journal',
+    cell: ({ row }) => <JournalCell row={row} />,
+  },
+  {
+    id: 'sumDt',
+    header: () => (
+      <RecordTable.InlineHead icon={IconMoneybag} label="Дебет дүн" />
+    ),
+    accessorKey: 'sumDt',
+    cell: ({ getValue, row }) => <SumDebitCell getValue={getValue} row={row} />,
+  },
+  {
+    id: 'sumCt',
+    header: () => (
+      <RecordTable.InlineHead icon={IconMoneybag} label="Кредит дүн" />
+    ),
+    accessorKey: 'sumCt',
+    cell: ({ getValue, row }) => (
+      <SumCreditCell getValue={getValue} row={row} />
+    ),
+  },
+  {
+    id: 'branch',
+    header: () => <RecordTable.InlineHead icon={IconFile} label="Салбар" />,
+    accessorKey: 'branch',
+    cell: ({ getValue, row }) => <BranchCell getValue={getValue} row={row} />,
+  },
+  {
+    id: 'department',
+    header: () => <RecordTable.InlineHead icon={IconFile} label="Хэлтэс" />,
+    accessorKey: 'department',
+    cell: ({ getValue, row }) => (
+      <DepartmentCell getValue={getValue} row={row} />
+    ),
+  },
+];

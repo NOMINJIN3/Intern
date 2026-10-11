@@ -1,0 +1,171 @@
+import { gql } from '@apollo/client';
+
+const productsAdd = gql`
+  mutation productsAdd(
+    $name: String
+    $shortName: String
+    $type: String
+    $categoryId: String
+    $description: String
+    $barcodes: [String]
+    $variants: JSON
+    $barcodeDescription: String
+    $unitPrice: Float
+    $code: String
+    $propertiesData: JSON
+    $attachment: AttachmentInput
+    $attachmentMore: [AttachmentInput]
+    $pdfAttachment: PdfAttachmentInput
+    $vendorId: String
+    $scopeBrandIds: [String]
+    $uom: String
+    $subUoms: JSON
+    $duration: Float
+    $durationType: ProductDurationType
+  ) {
+    productsAdd(
+      name: $name
+      shortName: $shortName
+      type: $type
+      categoryId: $categoryId
+      description: $description
+      barcodes: $barcodes
+      variants: $variants
+      barcodeDescription: $barcodeDescription
+      unitPrice: $unitPrice
+      code: $code
+      propertiesData: $propertiesData
+      attachment: $attachment
+      attachmentMore: $attachmentMore
+      pdfAttachment: $pdfAttachment
+      vendorId: $vendorId
+      scopeBrandIds: $scopeBrandIds
+      uom: $uom
+      subUoms: $subUoms
+      duration: $duration
+      durationType: $durationType
+    ) {
+      _id
+      attachment {
+        url
+      }
+      categoryId
+      code
+      createdAt
+      propertiesData
+      description
+      tagIds
+      name
+      shortName
+      uom
+      unitPrice
+      type
+      duration
+      durationType
+      vendor {
+        _id
+        primaryName
+      }
+    }
+  }
+`;
+
+const categoryRemove = gql`
+  mutation productCategoriesRemove($_id: String!) {
+    productCategoriesRemove(_id: $_id)
+  }
+`;
+
+const categoryEdit = gql`
+  mutation productCategoriesEdit(
+    $_id: String!
+    $name: String!
+    $code: String!
+    $parentId: String
+    $scopeBrandIds: [String]
+    $description: String
+    $attachment: AttachmentInput
+    $status: String
+    $meta: String
+    $maskType: String
+    $mask: JSON
+    $isSimilarity: Boolean
+    $similarities: JSON
+  ) {
+    productCategoriesEdit(
+      _id: $_id
+      name: $name
+      code: $code
+      parentId: $parentId
+      scopeBrandIds: $scopeBrandIds
+      description: $description
+      attachment: $attachment
+      status: $status
+      meta: $meta
+      maskType: $maskType
+      mask: $mask
+      isSimilarity: $isSimilarity
+      similarities: $similarities
+    ) {
+      _id
+    }
+  }
+`;
+const productsEdit = gql`
+  mutation ProductsEdit(
+    $_id: String!
+    $name: String
+    $shortName: String
+    $categoryId: String
+    $type: String
+    $description: String
+    $unitPrice: Float
+    $code: String
+    $propertiesData: JSON
+    $vendorId: String
+    $uom: String
+    $barcodeDescription: String
+    $barcodes: [String]
+    $currency: String
+    $variants: JSON
+    $subUoms: JSON
+    $scopeBrandIds: [String]
+    $attachment: AttachmentInput
+    $attachmentMore: [AttachmentInput]
+    $duration: Float
+    $durationType: ProductDurationType
+  ) {
+    productsEdit(
+      _id: $_id
+      name: $name
+      shortName: $shortName
+      categoryId: $categoryId
+      type: $type
+      description: $description
+      unitPrice: $unitPrice
+      code: $code
+      propertiesData: $propertiesData
+      vendorId: $vendorId
+      barcodes: $barcodes
+      uom: $uom
+      barcodeDescription: $barcodeDescription
+      currency: $currency
+      variants: $variants
+      subUoms: $subUoms
+      scopeBrandIds: $scopeBrandIds
+      attachment: $attachment
+      attachmentMore: $attachmentMore
+      duration: $duration
+      durationType: $durationType
+    ) {
+      _id
+    }
+  }
+`;
+
+export const productsMutations = {
+  productsEdit,
+  productsAdd,
+  categoryEdit,
+  categoryRemove,
+};

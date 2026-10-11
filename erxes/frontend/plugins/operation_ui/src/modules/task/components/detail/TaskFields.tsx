@@ -1,0 +1,201 @@
+import { ActivityList } from '@/activity/components/ActivityList';
+import { ConvertToProject } from '@/task/components/task-selects/ConvertToProject';
+import { DateSelectTask } from '@/task/components/task-selects/DateSelectTask';
+import { SelectAssigneeTask } from '@/task/components/task-selects/SelectAssigneeTask';
+import { SelectCycle } from '@/task/components/task-selects/SelectCycle';
+import { SelectEstimatedPoint } from '@/task/components/task-selects/SelectEstimatedPointTask';
+import { SelectMilestone } from '@/task/components/task-selects/SelectMilestone';
+import { SelectProject } from '@/task/components/task-selects/SelectProjectTask';
+import { SelectStatusTask } from '@/task/components/task-selects/SelectStatusTask';
+import { SelectTaskPriority } from '@/task/components/task-selects/SelectTaskPriority';
+import { SelectTeamTask } from '@/task/components/task-selects/SelectTeamTask';
+import { useUpdateTask } from '@/task/hooks/useUpdateTask';
+import { ITask } from '@/task/types';
+import { Block } from '@blocknote/core';
+import {
+  BlockEditor,
+  Separator,
+  Textarea,
+  useBlockEditor,
+  Combobox,
+} from 'erxes-ui';
+import { useEffect, useRef, useState } from 'react';
+import { useDebounce } from 'use-debounce';
+import { TagsSelect } from 'ui-modules';
+import { IconTags } from '@tabler/icons-react';
+import { parseDescriptionBlocks } from '@/operation/utils/parseDescriptionBlocks';
+
+export const TaskFields = ({ task }: { task: ITask }) => {
+  const {
+    _id: taskId,
+    teamId,
+    priority,
+    status,
+    assigneeId,
+    name: _name,
+    targetDate,
+    projectId,
+    estimatePoint,
+    cycleId,
+    milestoneId,
+    tagIds,
+  } = task || {};
+
+  const startDate = (task as any)?.startDate;
+  const description = (task as any)?.description;
+  const initialDescriptionContent = parseDescriptionBlocks(description);
+
+  const [descriptionContent, setDescriptionContent] = useState<
+    Block[] | undefined
+  >(initialDescriptionContent);
+
+  const editor = useBlockEditor({
+    initialContent: descriptionContent?.length ? descriptionContent : undefined,
+    placeholder: 'Description...',
+  });
+  const { updateTask } = useUpdateTask();
+  const [name, setName] = useState(_name);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const handleDescriptionChange = async () => {
+    const content = await editor?.document;
+    if (content) {
+      content.pop();
+      setDescriptionContent(content as Block[]);
+    }
+  };
+
+  const [debouncedDescriptionContent] = useDebounce(descriptionContent, 1000);
+  const [debouncedName] = useDebounce(name, 1000);
+
+  useEffect(() => {
+    if (!debouncedName || debouncedName === _name) return;
+    updateTask({
+      variables: {
+        _id: taskId,
+        name: debouncedName,
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedName]);
+  useEffect(() => {
+    if (!debouncedDescriptionContent) return;
+    if (
+      JSON.stringify(debouncedDescriptionContent) ===
+      JSON.stringify(parseDescriptionBlocks(description))
+    ) {
+      return;
+    }
+    updateTask({
+      variables: {
+        _id: taskId,
+        description: JSON.stringify(debouncedDescriptionContent),
+      },
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedDescriptionContent]);
+
+  useEffect(() => {
+    if (!textareaRef.current) {
+      return;
+    }
+    textareaRef.current.style.height = 'auto';
+    textareaRef.current.style.height = `${textareaRef.current.scrollHeight}px`;
+  }, [name]);
+
+  return (
+    <div className="flex flex-col gap-3">
+      <Textarea
+        ref={textareaRef}
+        className="shadow-none focus-visible:shadow-none p-0"
+        style={{ fontSize: '1.25rem', lineHeight: '1.75rem' }}
+        placeholder="Task Name"
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+      />
+      <TagsSelect.Provider
+        mode="multiple"
+        value={tagIds}
+        type="operation:task"
+        targetIds={[taskId]}
+      >
+        <div className="gap-2 flex flex-wrap w-full items-center">
+          <SelectStatusTask
+            variant="detail"
+            value={status}
+            id={taskId}
+            teamId={teamId}
+          />
+          <SelectTaskPriority
+            taskId={taskId}
+            value={priority}
+            variant="detail"
+          />
+          <SelectAssigneeTask
+            variant="detail"
+            value={assigneeId}
+            id={taskId}
+            teamIds={teamId ? [teamId] : undefined}
+          />
+          <DateSelectTask
+            value={startDate ? new Date(startDate) : undefined}
+            id={taskId}
+            type="startDate"
+            variant="detail"
+          />
+          <DateSelectTask
+            value={targetDate ? new Date(targetDate) : undefined}
+            id={taskId}
+            type="targetDate"
+            variant="detail"
+          />
+          <SelectTeamTask
+            taskId={taskId}
+            value={teamId || ''}
+            variant="detail"
+          />
+          <SelectCycle
+            value={cycleId || ''}
+            taskId={taskId}
+            variant="detail"
+            teamId={teamId}
+          />
+
+          <SelectProject
+            value={projectId}
+            taskId={taskId}
+            variant="detail"
+            teamId={teamId}
+          />
+          <SelectEstimatedPoint
+            value={estimatePoint}
+            taskId={taskId}
+            teamId={teamId}
+            variant="detail"
+          />
+          <SelectMilestone
+            value={milestoneId || ''}
+            taskId={taskId}
+            projectId={projectId}
+            variant="detail"
+          />
+          <ConvertToProject task={task} />
+          <IconTags className="size-5 ml-2"></IconTags>
+          <TagsSelect.SelectedList />
+          <TagsSelect.Trigger variant="ICON" />
+          <Combobox.Content>
+            <TagsSelect.Content />
+          </Combobox.Content>
+        </div>
+      </TagsSelect.Provider>
+      <Separator className="mb-4 mt-2" />
+      <div className="min-h-56 overflow-y-auto">
+        <BlockEditor
+          editor={editor}
+          onChange={handleDescriptionChange}
+          className="min-h-full read-only"
+        />
+      </div>
+      <ActivityList contentId={taskId} contentDetail={task} />
+    </div>
+  );
+};

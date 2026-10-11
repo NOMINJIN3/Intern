@@ -1,0 +1,103 @@
+import { atom } from 'jotai';
+import {
+  IBrowserInfo,
+  IConnectionInfo,
+  ICustomerData,
+  IMessengerData,
+  ITicketConfig,
+  IWidgetUiOptions,
+} from '../types/connection';
+import { IHeaderItem, IMessage } from '../types';
+import type { INotificationItem } from '../hooks/useWidgetNotifications';
+import { HEADER_ITEMS } from '../constants';
+import { ITicketCheckProgress } from '../ticket/types';
+import { atomWithStorage } from 'jotai/utils';
+import { set } from 'date-fns';
+
+// FAQ navigation state
+export type FaqView = 'topic' | 'category' | 'article';
+// Stack of category IDs navigated into (supports nested categories)
+export const faqCategoryStackAtom = atom<string[]>([]);
+// Currently open article ID (null = not viewing article)
+export const faqArticleIdAtom = atom<string | null>(null);
+// Derived current view
+export const faqCurrentViewAtom = atom<FaqView>((get) => {
+  if (get(faqArticleIdAtom)) return 'article';
+  if (get(faqCategoryStackAtom).length > 0) return 'category';
+  return 'topic';
+});
+
+export const webAppCredentialsUrlAtom = atom<string | null>(null);
+
+export const customerIdAtom = atom<string | null>(null);
+
+export const customerDataAtom = atomWithStorage<ICustomerData | null>(
+  'customerData',
+  null,
+);
+
+export const messengerTabAtom = atom<string>('default');
+export const setActiveTabAtom = atom(null, (get, set, tab: string) => {
+  set(messengerTabAtom, tab);
+});
+export const resetTabAtom = atom(null, (get, set) => {
+  set(messengerTabAtom, 'default');
+});
+
+export const connectionAtom = atom<IConnectionInfo>({
+  widgetsMessengerConnect: {},
+  browserInfo: {},
+});
+
+export const uiOptionsAtom = atom<IWidgetUiOptions>({
+  primary: {
+    DEFAULT: '#000000',
+    foreground: '#ffffff',
+  },
+  logo: '',
+  navigationVariant: 'pill',
+});
+
+export const ticketConfigAtom = atom<ITicketConfig | null>(null);
+
+export const hasTicketConfigAtom = atom<boolean>(false);
+
+export const hasKnowledgeBaseTopicAtom = atom<boolean>(false);
+
+export const headerItemsAtom = atom<IHeaderItem[]>(HEADER_ITEMS);
+
+export const conversationIdAtom = atom<string | null>(null);
+export const integrationIdAtom = atom<string | null>(null);
+
+export const messengerDataAtom = atom<IMessengerData | null>(null);
+
+export const setConversationIdAtom = atom(
+  null,
+  (get, set, conversationId: string | null) => {
+    set(conversationIdAtom, conversationId);
+  },
+);
+
+export const lastUnreadMessageAtom = atom<IMessage | null>(null);
+
+export const isBrowserInfoSavedAtom = atom<boolean>(false);
+export const setIsBrowserInfoSavedAtom = atom(
+  null,
+  (get, set, isBrowserInfoSaved: boolean) => {
+    set(isBrowserInfoSavedAtom, isBrowserInfoSaved);
+  },
+);
+export const resetIsBrowserInfoSavedAtom = atom(null, (get, set) => {
+  set(isBrowserInfoSavedAtom, false);
+});
+export const browserInfoAtom = atom<IBrowserInfo | null>(null);
+
+export const toastUserAtom = atom<boolean>(false);
+
+export const ticketProgressAtom = atom<ITicketCheckProgress | null>(null);
+
+export const userTicketCreatedNumberAtom = atom<string | null>(null);
+
+export const unreadNotificationCountAtom = atom<number>(0);
+
+export const notificationsAtom = atom<INotificationItem[]>([]);

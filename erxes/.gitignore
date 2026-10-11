@@ -1,0 +1,87 @@
+# See http://help.github.com/ignore-files/ for more about ignoring files.
+
+# compiled output
+dist
+tmp
+/out-tsc
+
+# dependencies
+node_modules
+
+# pnpm is the recommended package manager across the project
+**/**/.package-lock.json
+**/**/.yarn.lock
+
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+
+# System Files
+.DS_Store
+Thumbs.db
+
+.nx/cache
+.nx/workspace-data
+.nx
+.env
+
+# Agent skills and configuration
+.agents/*
+!.agents/
+!.agents/README.md
+!.agents/ROUTER.md
+!.agents/manifest.yaml
+!.agents/rules/
+!.agents/rules/*.md
+!.agents/skills/
+!.agents/skills/*.md
+!.agents/skills/*/
+!.agents/skills/*/*
+!.agents/maps/
+!.agents/maps/*.yaml
+!.agents/references/
+!.agents/references/*.yaml
+!.agents/scripts/
+!.agents/scripts/*.sh
+!.agents/state/
+!.agents/state/.gitkeep
+# Runtime-only session/scope state stays local:
+.agents/state/*.json
+.agents/state/*.yaml
+.agents/session.yaml
+.claude
+
+storybook-static
+backend/plugins/payment_api/src/public/widget/
+
+# Redis dump file
+dump.rdb
+
+# Local runtime upload artifacts
+backend/core-api/src/utils/private/uploads/
+
+# Sentry CLI local auth (token set via SENTRY_AUTH_TOKEN env var)
+.sentryclirc

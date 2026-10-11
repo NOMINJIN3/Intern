@@ -1,0 +1,143 @@
+import { IProductDocument, IUom } from 'erxes-api-shared/core-types';
+import { sendTRPCMessage } from 'erxes-api-shared/utils';
+import { PRODUCT_SIMILARITY_STATUSES } from '@/products/constants';
+import { IContext } from '~/connectionResolvers';
+import { IProductParams } from '~/modules/products/@types';
+
+const inventoryKey = (id?: string) => id || '_';
+
+export default {
+  __resolveReference: async (
+    { _id }: { _id: string },
+    { models }: IContext,
+  ) => {
+    return models.Products.findOne({ _id });
+  },
+  category: async (
+    product: IProductDocument,
+    _args: undefined,
+    { models }: IContext,
+  ) => {
+    if (!product.categoryId) {
+      return null;
+    }
+
+    return models.ProductCategories.findOne({ _id: product.categoryId });
+  },
+  vendor: async (
+    product: IProductDocument,
+    _args: undefined,
+    { models }: IContext,
+  ) => {
+    if (!product.vendorId) {
+      return null;
+    }
+
+    return models.Companies.findOne({ _id: product.vendorId });
+  },
+
+  remainder: async (
+    product: IProductDocument,
+    _args: undefined,
+    { subdomain }: IContext,
+    info: any,
+  ) => {
+    const { branchId, departmentId, pipelineId } = info?.variableValues || {};
+    let { branchIds, departmentIds } = info?.variableValues || {};
+
+    if (branchId || departmentId) {
+      const branchKey = inventoryKey(branchId);
+      const departmentKey = inventoryKey(departmentId);
+      const { remainder, cost, soonIn, soonOut } =
+        product?.inventories?.[branchKey]?.[departmentKey] || {};
+      return { remainder, cost, soonIn, soonOut };
+    }
+
+    if (pipelineId && !branchIds?.length && !departmentIds?.length) {
+      const pipeline = await sendTRPCMessage({
+        subdomain,
+        pluginName: 'sales',
+        module: 'pipeline',
+        action: 'findOne',
+        input: {
+          query: { _id: pipelineId },
+          fields: { branchIds: 1, departmentIds: 1 },
+        },
+      });
+
+      branchIds = pipeline?.branchIds?.length ? pipeline?.branchIds : ['_'];
+      departmentIds = pipeline?.departmentIds?.length
+        ? pipeline?.departmentIds
+        : ['_'];
+    }
+
+    const result = { remainder: 0, cost: 0, soonIn: 0, soonOut: 0 };
+
+    for (const branchID of Object.keys(product.inventories || {})) {
+      if (branchIds?.length && !branchIds.includes(branchID)) {
+        continue;
+      }
+
+      for (const departmentID of Object.keys(
+        product.inventories?.[branchID] || {},
+      )) {
+        if (departmentIds?.length && !departmentIds.includes(departmentID)) {
+          continue;
+        }
+
+        const {
+          remainder = 0,
+          cost = 0,
+          soonIn = 0,
+          soonOut = 0,
+        } = product.inventories?.[branchID]?.[departmentID] || {};
+        result.remainder += remainder;
+        result.cost += cost;
+        result.soonIn += soonIn;
+        result.soonOut += soonOut;
+      }
+    }
+    return result;
+  },
+
+  discount: async (product: IProductDocument, args: IProductParams) => {
+    if (args.branchId && args.departmentId) {
+      return product.discounts?.[args.branchId]?.[args.departmentId];
+    }
+  },
+
+  similarity: async (
+    product: IProductDocument,
+    _args: undefined,
+    { models }: IContext,
+  ) => {
+    if (!product.similarityId) {
+      return null;
+    }
+
+    return models.ProductSimilarities.findOne({
+      _id: product.similarityId,
+      status: { $ne: PRODUCT_SIMILARITY_STATUSES.DELETED },
+    }).lean();
+  },
+
+  uom: async (
+    product: IProductDocument,
+    _args: undefined,
+    { models }: IContext,
+  ) => {
+    if (!product.uom) {
+      return null;
+    }
+
+    const uom = await models.Uoms.findOne({
+      $or: [{ _id: product.uom }, { name: product.uom }, { code: product.uom }],
+    }).lean();
+
+    if (!uom) {
+      return null;
+    }
+
+    return uom?.name || uom?.code || '';
+  },
+};

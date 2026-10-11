@@ -1,0 +1,89 @@
+import { useState } from 'react';
+import { Tabs } from 'erxes-ui';
+import type { FieldValues, UseFormReturn } from 'react-hook-form';
+import { ContentTab } from './ContentTab';
+import type {
+  CustomType,
+  LanguageOption,
+  PostUrlField,
+  PostUrlSource,
+  SelectOption,
+} from './ContentTab';
+import { MediaSection } from './MediaSection';
+import type { IWebsite } from '~/modules/cms/types';
+
+interface PostSidebarPanelProps {
+  form: UseFormReturn<FieldValues>;
+  categories: SelectOption[];
+  tags: SelectOption[];
+  customTypes: CustomType[];
+  websiteId: string;
+  availableLanguages: string[];
+  defaultLanguage: string;
+  selectedLanguage: string;
+  languageOptions: LanguageOption[];
+  postUrlField: PostUrlField;
+  fullPost: PostUrlSource | null | undefined;
+  cmsConfig?: IWebsite;
+  handleLanguageChange: (lang: string) => void;
+}
+
+export const PostSidebarPanel = ({
+  form,
+  categories,
+  tags,
+  customTypes,
+  websiteId,
+  availableLanguages,
+  defaultLanguage,
+  selectedLanguage,
+  languageOptions,
+  postUrlField,
+  fullPost,
+  cmsConfig,
+  handleLanguageChange,
+}: PostSidebarPanelProps) => {
+  const [activeTab, setActiveTab] = useState<'content' | 'media'>('content');
+
+  return (
+    <div className="rounded-lg border flex flex-col mt-6">
+      <div className="px-4 pt-1 border-b">
+        <Tabs
+          value={activeTab}
+          onValueChange={(v) => setActiveTab(v as 'content' | 'media')}
+        >
+          <Tabs.List className="border-none">
+            <div className="flex justify-evenly items-center gap-4">
+              <Tabs.Trigger value="content" className="w-full">
+                Content
+              </Tabs.Trigger>
+              <Tabs.Trigger value="media" className="w-full">
+                Media
+              </Tabs.Trigger>
+            </div>
+          </Tabs.List>
+        </Tabs>
+      </div>
+      <form className="p-4 space-y-4">
+        {activeTab === 'content' && (
+          <ContentTab
+            form={form}
+            categories={categories}
+            tags={tags}
+            customTypes={customTypes}
+            websiteId={websiteId}
+            availableLanguages={availableLanguages}
+            defaultLanguage={defaultLanguage}
+            selectedLanguage={selectedLanguage}
+            languageOptions={languageOptions}
+            postUrlField={postUrlField}
+            fullPost={fullPost}
+            cmsConfig={cmsConfig}
+            handleLanguageChange={handleLanguageChange}
+          />
+        )}
+        {activeTab === 'media' && <MediaSection form={form} />}
+      </form>
+    </div>
+  );
+};

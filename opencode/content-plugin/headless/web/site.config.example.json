@@ -1,0 +1,17 @@
+{
+  "name": "my-site-name",
+  "template_type": "business",
+  "tone": "modern",
+  "language": "en",
+  "languages": ["en"],
+  "sections": ["hero", "about", "services", "contact"],
+  "client_portal_id": "",
+  "erxes_endpoint": "",
+  "erxes_app_token": "",
+  "erxes_cms_id": "",
+  "color_hint": null,
+  "extra_notes": null,
+  "deploy_target": "vercel",
+  "ui_source": "words",
+  "ui_source_ref": "A clean modern business site with a bold hero and minimal layout"
+}

@@ -1,0 +1,152 @@
+import { z } from 'zod';
+import { segmentFormSchema } from '../states/segmentFormSchema';
+import { IField } from 'ui-modules/modules/properties';
+import { FieldArray } from 'react-hook-form';
+
+export type TSegmentForm = z.infer<typeof segmentFormSchema>;
+export interface ListQueryResponse {
+  segments: ISegment[];
+}
+
+export interface IAttributeFilter {
+  name: string;
+  operator: string;
+  value: string;
+}
+
+export interface IOperator {
+  name: string;
+  value: string;
+  noInput?: boolean;
+}
+
+export interface ICondition {
+  // type: 'property' | 'event' | 'subSegment';
+
+  propertyType?: string;
+  propertyName?: string;
+  propertyOperator?: string;
+  propertyValue?: string;
+
+  eventName?: string;
+  eventOccurence?: 'exactly' | 'atleast' | 'atmost';
+  eventOccurenceValue?: number;
+  eventAttributeFilters?: IAttributeFilter[];
+
+  subSegmentId?: string;
+  subSegmentForPreview?: ISegment;
+
+  config?: any;
+}
+
+export interface ISegment {
+  _id: string;
+  contentType: string;
+  name: string;
+  description?: string;
+  subOf?: string;
+  color?: string;
+  shouldWriteActivityLog: boolean;
+  count?: number;
+
+  conditions: ICondition[];
+  conditionsConjunction?:
+    | TConditionsConjunction.AND
+    | TConditionsConjunction.OR;
+  conditionSegments: ISegment[];
+
+  scopeBrandIds?: string[];
+
+  config?: any;
+}
+
+export type FieldQueryResponse = {
+  fieldsCombinedByContentType: IField[];
+  segmentsGetAssociationTypes?: TPropertyTypeOption[];
+  automationSetPropertyTargets?: TPropertyTypeOption[];
+};
+
+export type TPropertyTypeOption = {
+  label?: string;
+  type?: string;
+  source?: 'target' | 'relation' | 'resolver';
+  cardinality?: 'one' | 'many';
+  sourceType?: string;
+  relation?: {
+    contentType: string;
+    relatedContentType: string;
+  };
+  resolverKey?: string;
+  pluginName?: string;
+  value: string;
+  description: string;
+};
+
+export type TConditionParentFieldName = `conditionSegments.${number}`;
+export type TConditionFieldPath =
+  | `${TConditionParentFieldName}.conditions`
+  | 'conditions';
+
+export type TSegmentCondition = FieldArray<TSegmentForm, TConditionFieldPath>;
+
+export type IFormFieldName = `${TConditionFieldPath}.${number}`;
+
+export type ConditionFieldKey =
+  | 'propertyType'
+  | 'propertyName'
+  | 'propertyOperator'
+  | 'propertyValue';
+
+export type IPropertyField = {
+  index: number;
+  fields: IField[];
+  currentField?: IField;
+  parentFieldName: IFormFieldName;
+  defaultValue?: any;
+  propertyTypes: any[];
+  loading: boolean;
+  onBeforeFieldChange?: (field: ConditionFieldKey) => void;
+};
+
+export type IPropertyCondtion = {
+  index: number;
+  currentField?: IField;
+  operators: IOperator[];
+  parentFieldName: IFormFieldName;
+  defaultValue?: any;
+  loading: boolean;
+  onBeforeFieldChange?: (field: ConditionFieldKey) => void;
+};
+
+export type IPropertyInput = {
+  index: number;
+  parentFieldName: IFormFieldName;
+  defaultValue?: any;
+  operators: IOperator[];
+  selectedField?: IField;
+  loading: boolean;
+  onBeforeFieldChange?: (field: ConditionFieldKey) => void;
+};
+
+export interface ISegmentMap {
+  _id?: string;
+  key: string;
+  contentType: string;
+  config?: any;
+  conditions: ICondition[];
+  conditionsConjunction: string;
+}
+
+export interface IConditionsForPreview {
+  type: string;
+  subSegmentForPreview: ISegmentMap;
+}
+
+export enum TConditionsConjunction {
+  AND = 'and',
+  OR = 'or',
+}
+export enum SegmentFormMode {
+  DEFAULT = 'default',
+  SINGLE = 'single',
+}

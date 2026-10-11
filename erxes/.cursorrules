@@ -1,0 +1,58 @@
+# erxes Cursor Rules
+
+Use `AGENTS.md`, nested `AGENTS.md` files, and `.agents/rules/*.md` as the source
+of truth for this repository. These rules intentionally mirror the project
+specific guidance there instead of generic React or Next.js preferences.
+
+## Core Workflow
+
+- Read the root `AGENTS.md` and any nested `AGENTS.md` that applies to the
+  touched path.
+- Search for similar implementations with `rg` before creating new code.
+- Reuse existing components, hooks, GraphQL documents, utilities, and state
+  patterns before adding new ones.
+- Keep changes minimal and scoped to the requested task.
+- Do not refactor unrelated files.
+- Do not introduce new dependencies unless explicitly required.
+
+## Architecture
+
+- Plugins must remain isolated; avoid cross-plugin imports.
+- Shared frontend UI primitives belong in `frontend/libs/erxes-ui`.
+- Shared frontend business/UI modules belong in `frontend/libs/ui-modules`.
+- `frontend/core-ui` is the Module Federation host app, not the default place
+  for reusable plugin UI.
+- Follow existing GraphQL, Apollo, routing, state, and UI patterns in the
+  touched project.
+- Do not modify backend contracts from a frontend task unless explicitly
+  requested.
+
+## Frontend
+
+- Use React 18, Rspack, Module Federation, Tailwind, Apollo Client, Jotai,
+  React Router, `erxes-ui`, `ui-modules`, and `@tabler/icons-react` according
+  to nearby code.
+- Match local page layout, tables, filters, drawers, dialogs, loading states,
+  empty states, and responsive behavior.
+- Preserve local import aliases such as `~/*`, `@/*`, `erxes-ui`, and
+  `ui-modules`; do not force absolute imports when nearby code uses relatives.
+- Keep feature hooks, GraphQL documents, constants, types, and state near the
+  feature unless a shared location already exists.
+
+## TypeScript and Style
+
+- Match the touched module's existing `type`/`interface`, enum, export, and file
+  naming style.
+- Avoid introducing new `any`, but do not rewrite unrelated legacy types.
+- Let the repository's lint, TypeScript, and Prettier behavior win over personal
+  style.
+- Remove debug logs and commented-out dead code before finishing.
+
+## Validation
+
+- Run the focused Nx validation that exists for the touched project.
+- For frontend plugins, prefer `pnpm nx lint <plugin>` and
+  `pnpm nx build <plugin>`.
+- Run `pnpm nx test <plugin>` when tests, test setup, or tested behavior were
+  touched.
+- For documentation-only edits, verify referenced paths and commands.

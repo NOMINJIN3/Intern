@@ -1,0 +1,125 @@
+import { Weekday } from '@/integrations/erxes-messenger/types/Weekday';
+import { ScheduleDay } from '../constants/emHoursSchema';
+
+export interface EMLink {
+  url: string;
+}
+
+export type SocialPlatform = 'youtube' | 'facebook' | 'instagram' | 'twitter';
+
+export type SocialLinks = Record<SocialPlatform, string>;
+
+export interface ProcessedLinks {
+  links: Partial<SocialLinks>;
+  externalLinks: EMLink[];
+}
+
+type ScheduleDays = Weekday & ScheduleDay;
+
+// Messenger setup payload type
+export interface MessengerSetupPayload {
+  _id: string;
+  ticketConfigId?: string;
+  name?: string;
+  brandId?: string;
+  languageCode?: string;
+  channel?: {
+    _id: string;
+    name?: string;
+  };
+  channels?: {
+    _id: string;
+  }[];
+  messengerData?: {
+    notifyCustomer?: boolean;
+    botEndpointUrl?: string;
+    botShowInitialMessage?: boolean;
+    botCheck?: boolean;
+    botGreetMessage?: string;
+    automationId?: string;
+    persistentMenus?: {
+      _id: string;
+      name: string;
+      type: string;
+      url: string;
+    }[];
+    availabilityMethod?: 'manual' | 'auto';
+    isOnline?: boolean;
+    timezone?: string;
+    responseRate?: string;
+    showTimezone?: boolean;
+    onlineHours?: {
+      _id: string;
+      day: ScheduleDays;
+      from: string;
+      to: string;
+    }[];
+    supporterIds?: string[];
+    messages?: {
+      [key: string]: {
+        greetings?: {
+          title?: string;
+          message?: string;
+        };
+        welcome?: string;
+        away?: string;
+        thank?: string;
+      };
+    };
+    requireAuth?: boolean;
+    showChat?: boolean;
+    showLauncher?: boolean;
+    hideWhenOffline?: boolean;
+    forceLogoutWhenResolve?: boolean;
+    showVideoCallRequest?: boolean;
+    links?: { [key: string]: string };
+    externalLinks?: { url: string }[];
+    knowledgeBaseTopicId?: string;
+    websiteApps?: {
+      _id?: string;
+      kind: string;
+      showInInbox: boolean;
+      credentials: {
+        integrationId: string;
+        description?: string;
+        buttonText?: string;
+        url: string;
+      };
+      scopeBrandIds: string[];
+    }[];
+  };
+  websiteMessengerApps?: {
+    _id?: string;
+    kind: string;
+    showInInbox: boolean;
+    credentials: {
+      integrationId: string;
+      description?: string;
+      buttonText?: string;
+      url: string;
+    };
+  }[];
+  callData?: {
+    header?: string;
+    description?: string;
+    secondPageHeader?: string;
+    secondPageDescription?: string;
+    departments?: {
+      _id: string;
+      name: string;
+      operators: string[];
+    }[];
+    isReceiveWebCall?: boolean;
+  };
+  uiOptions?: {
+    logo?: string;
+    launcherLogo?: string;
+    primary?: {
+      DEFAULT?: string;
+      foreground?: string;
+    };
+    backgroundColor?: string;
+    heroStyleVariant?: 'glossy' | 'aurora' | 'mesh' | 'flat';
+    navigationVariant?: 'pill' | 'fluid';
+  };
+}

@@ -1,0 +1,259 @@
+import { sendTRPCMessage } from 'erxes-api-shared/utils';
+import { IModels } from '~/connectionResolvers';
+import { CONTACT_STATUSES } from './constants';
+import { withPropertyConditions } from '@/properties/utils';
+
+export const generateFilter = async (
+  subdomain: string,
+  params: any,
+  models: IModels,
+) => {
+  const {
+    searchValue,
+    tagIds,
+    excludeTagIds,
+    tagWithRelated,
+    type,
+    dateFilters,
+    propertiesData,
+    brandIds,
+    integrationIds,
+    integrationTypes,
+    status,
+    ids,
+    excludeIds,
+  } = params;
+
+  const filter: any = {
+    status: { $ne: CONTACT_STATUSES.deleted },
+  };
+
+  if (type) {
+    filter['state'] = { $eq: type };
+  }
+
+  if (status) {
+    filter.status = { $eq: CONTACT_STATUSES[status] };
+  }
+
+  if (searchValue) {
+    const regex = { $regex: searchValue, $options: 'i' };
+
+    filter['$or'] = [
+      { searchText: regex },
+      { primaryEmail: regex },
+      { emails: regex },
+      { primaryPhone: regex },
+      { phones: regex },
+      { firstName: regex },
+      { lastName: regex },
+      { middleName: regex },
+    ];
+  }
+
+  if (ids?.length) {
+    filter['_id'] = excludeIds ? { $nin: ids } : { $in: ids };
+  }
+
+  if (brandIds || integrationIds || integrationTypes) {
+    const relatedIntegrationIdSet = new Set();
+
+    if (brandIds) {
+      const integrations = await findIntegrations(subdomain, {
+        brandId: { $in: brandIds },
+      });
+      integrations.forEach((i) => relatedIntegrationIdSet.add(i._id));
+    }
+
+    if (integrationIds) {
+      const integrations = await findIntegrations(subdomain, {
+        _id: { $in: integrationIds },
+      });
+      integrations.forEach((i) => relatedIntegrationIdSet.add(i._id));
+    }
+
+    if (integrationTypes) {
+      const integrations = await findIntegrations(subdomain, {
+        kind: { $in: integrationTypes },
+      });
+      integrations.forEach((i) => relatedIntegrationIdSet.add(i._id));
+    }
+
+    if (relatedIntegrationIdSet.size > 0) {
+      filter['relatedIntegrationIds'] = {
+        $in: Array.from(relatedIntegrationIdSet),
+      };
+    }
+  }
+
+  if (tagIds?.length || excludeTagIds?.length) {
+    let baseTagIds = tagIds || excludeTagIds || [];
+
+    if (tagWithRelated) {
+      const tagObjs = await models.Tags.find({ _id: { $in: baseTagIds } });
+
+      tagObjs.forEach((tag) => {
+        baseTagIds = baseTagIds.concat(tag.relatedIds || []);
+      });
+    }
+
+    baseTagIds = [...new Set(baseTagIds)];
+
+    if (tagIds?.length && excludeTagIds?.length) {
+      filter['tagIds'] = {
+        $in: baseTagIds.filter((id) => tagIds.includes(id)),
+        $nin: baseTagIds.filter((id) => excludeTagIds.includes(id)),
+      };
+    } else if (tagIds?.length) {
+      filter['tagIds'] = { $in: baseTagIds };
+    } else if (excludeTagIds?.length) {
+      filter['tagIds'] = { $nin: baseTagIds };
+    }
+  }
+
+  if (dateFilters) {
+    try {
+      const dateFilter = JSON.parse(dateFilters);
+
+      for (const [key, value] of Object.entries(dateFilter)) {
+        const { gte, lte } = (value || {}) as { gte?: string; lte?: string };
+
+        if (gte || lte) {
+          filter[key] = {};
+
+          if (gte) {
+            filter[key]['$gte'] = gte;
+          }
+
+          if (lte) {
+            filter[key]['$lte'] = lte;
+          }
+        }
+      }
+    } catch (err) {
+      throw new Error(`Invalid dateFilters JSON: ${err}`);
+    }
+  }
+
+  if (propertiesData) {
+    const propertyConditions = withPropertyConditions(propertiesData);
+
+    if (propertyConditions.length) {
+      filter['$and'] = [...(filter['$and'] || []), ...propertyConditions];
+    }
+  }
+
+  return filter;
+};
+
+export const createOrUpdate = async ({
+  collection,
+  data: { rows, doNotReplaceExistingValues },
+}) => {
+  const operations: any = [];
+
+  for (const row of rows) {
+    const { selector, doc, customFieldsData } = row;
+
+    const prevEntry = await collection.findOne(selector).lean();
+
+    if (prevEntry) {
+      let cfData = prevEntry.customFieldsData || [];
+
+      // remove existing rows
+      for (const cf of customFieldsData || []) {
+        cfData = cfData.filter(({ field }) => field !== cf.field);
+      }
+
+      // add new rows
+      for (const cf of customFieldsData || []) {
+        cfData.push(cf);
+      }
+
+      const newDoc = { ...doc };
+
+      if (doNotReplaceExistingValues) {
+        for (const fieldName of Object.keys(doc)) {
+          if (prevEntry[fieldName]) {
+            delete newDoc[fieldName];
+          }
+        }
+      }
+
+      newDoc.customFieldsData = cfData;
+
+      operations.push({
+        updateOne: { filter: selector, update: { $set: newDoc } },
+      });
+    } else {
+      doc.customFieldsData = customFieldsData;
+      doc.createdAt = new Date();
+      doc.updatedAt = new Date();
+      operations.push({ insertOne: { document: doc } });
+    }
+  }
+
+  return collection.bulkWrite(operations);
+};
+
+export const findIntegrations = (subdomain: string, query, options?) =>
+  sendTRPCMessage({
+    subdomain,
+
+    pluginName: 'frontline',
+    method: 'query',
+    module: 'integration',
+    action: 'find',
+    input: { query },
+    defaultValue: [],
+    options,
+  });
+
+export const customersCount = async ({
+  models,
+  subdomain,
+  type,
+}: {
+  models: IModels;
+  subdomain: string;
+  type: string;
+}) => {
+  const counts = {};
+
+  switch (type) {
+    case 'tag': {
+      const tagIds = await models.Tags.find({ type: 'core:customer' }).distinct(
+        '_id',
+      );
+
+      for (const tagId of tagIds) {
+        counts[tagId] = await models.Customers.countDocuments({
+          tagIds: tagId,
+        });
+      }
+
+      break;
+    }
+    case 'brand': {
+      const brandIds = await models.Brands.find({}).distinct('_id');
+
+      const integrations = await findIntegrations(subdomain, {
+        brandId: { $in: brandIds },
+      });
+
+      for (const integration of integrations) {
+        if (!integration.brandId) {
+          continue;
+        }
+
+        counts[integration.brandId] = await models.Customers.countDocuments({
+          relatedIntegrationIds: integration._id,
+        });
+      }
+
+      break;
+    }
+  }
+
+  return counts;
+};

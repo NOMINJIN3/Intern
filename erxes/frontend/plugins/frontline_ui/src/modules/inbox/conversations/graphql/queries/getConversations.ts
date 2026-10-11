@@ -1,0 +1,87 @@
+import { gql } from '@apollo/client';
+import {
+  GQL_CURSOR_PARAM_DEFS,
+  GQL_CURSOR_PARAMS,
+  GQL_PAGE_INFO,
+} from 'erxes-ui';
+
+export const GET_CONVERSATIONS = gql`
+  query Conversations(
+    $channelId: String
+    $status: String
+    $unassigned: String
+    $tag: String
+    $integrationType: String
+    $starred: String
+    $startDate: String
+    $endDate: String
+    $segment: String
+    $awaitingResponse: String
+    $participating: String
+    $customerId: String
+    $brandId: String
+    ${GQL_CURSOR_PARAM_DEFS}
+  ) {
+    conversations(
+      channelId: $channelId
+      status: $status
+      unassigned: $unassigned
+      tag: $tag
+      integrationType: $integrationType
+      starred: $starred
+      startDate: $startDate
+      endDate: $endDate
+      segment: $segment
+      awaitingResponse: $awaitingResponse
+      participating: $participating
+      customerId: $customerId
+      brandId: $brandId
+      ${GQL_CURSOR_PARAMS}
+    ) {
+      list {
+      _id
+      content
+      createdAt
+      updatedAt
+      integrationId
+      customer {
+        _id
+        firstName
+        middleName
+        lastName
+        primaryEmail
+        avatar
+        primaryPhone
+        __typename
+      }
+      readUserIds
+      tagIds
+      __typename
+      assignedUserId
+      assignedUser {
+        _id
+        details {
+          avatar
+          fullName
+        }
+      }
+      integration {
+        _id
+        channelId
+        kind
+        name
+        channel {
+          updatedAt
+          name
+          memberCount
+          icon
+          description
+          createdAt
+          _id
+        }
+      }
+    }
+      ${GQL_PAGE_INFO}
+    }
+  }
+`;

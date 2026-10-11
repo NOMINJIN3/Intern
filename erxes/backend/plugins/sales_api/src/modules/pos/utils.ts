@@ -1,0 +1,949 @@
+import {
+  checkServiceRunning,
+  isEnabled,
+  sendTRPCMessage,
+} from 'erxes-api-shared/utils';
+import * as _ from 'underscore';
+import { IModels, generateModels } from '~/connectionResolvers';
+import { sendPosclientHealthCheck, sendPosclientMessage } from '~/initWorker';
+import { IPosOrder, IPosOrderDocument } from './@types/orders';
+import { IPosDocument } from './@types/pos';
+import { sendAutomationTrigger } from 'erxes-api-shared/core-modules';
+
+export const getConfig = async (
+  subdomain: string,
+  code: string,
+  defaultValue?: any,
+) => {
+  return await sendTRPCMessage({
+    subdomain,
+
+    method: 'query',
+    pluginName: 'core',
+    module: 'config',
+    action: 'getConfig',
+    input: { code, defaultValue },
+  });
+};
+
+export const getChildCategories = async (subdomain: string, categoryIds) => {
+  const childs = await sendTRPCMessage({
+    subdomain,
+
+    pluginName: 'core',
+    module: 'productCategories',
+    action: 'withChilds',
+    input: { ids: categoryIds },
+    defaultValue: [],
+  });
+
+  const catIds: string[] = (childs || []).map((ch) => ch._id) || [];
+  return Array.from(new Set(catIds));
+};
+
+const getChildTags = async (subdomain: string, tagIds) => {
+  const childs = await sendTRPCMessage({
+    subdomain,
+
+    pluginName: 'core',
+    module: 'tag',
+    action: 'findWithChild',
+    input: { query: { _id: { $in: tagIds } }, fields: { _id: 1 } },
+    defaultValue: [],
+  });
+
+  const foundTagIds: string[] = (childs || []).map((ch) => ch._id) || [];
+  return Array.from(new Set(foundTagIds));
+};
+
+export const getBranchesUtil = async (
+  subdomain: string,
+  models: IModels,
+  posToken: string,
+) => {
+  const pos = await models.Pos.findOne({ token: posToken }).lean();
+
+  if (!pos) {
+    return { error: 'not found pos' };
+  }
+
+  const allowsPos = await models.Pos.find({
+    isOnline: { $ne: true },
+    branchId: { $in: pos.allowBranchIds },
+  })
+    .sort({ onServer: -1, name: 1 })
+    .lean();
+
+  let healthyBranchIds = [] as any;
+
+  const { ALLOW_OFFLINE_POS } = process.env;
+
+  if ([true, 'true', 'True', '1'].includes(ALLOW_OFFLINE_POS || '')) {
+    for (const allowPos of allowsPos) {
+      if (healthyBranchIds.includes(allowPos.branchId)) {
+        continue;
+      }
+
+      const response = await sendPosclientHealthCheck({
+        subdomain,
+        pos: allowPos,
+      });
+
+      if (response?.healthy === 'ok') {
+        healthyBranchIds.push(allowPos.branchId);
+      }
+    }
+  } else {
+    healthyBranchIds = allowsPos.map((p) => p.branchId);
+  }
+
+  return await sendTRPCMessage({
+    subdomain,
+    method: 'query',
+    pluginName: 'core',
+    module: 'branches',
+    action: 'find',
+    input: {
+      query: { _id: { $in: healthyBranchIds } },
+      fields: {
+        _id: 1,
+        title: 1,
+        address: 1,
+        radius: 1,
+        phoneNumber: 1,
+        email: 1,
+        coordinate: 1,
+        image: 1,
+        code: 1,
+        order: 1,
+        status: 1,
+        links: 1,
+      },
+    },
+    defaultValue: [],
+  });
+};
+
+export const confirmLoyalties = async (subdomain: string, order: IPosOrder) => {
+  const models = await generateModels(subdomain);
+
+  const pos = await models.Pos.findOne({
+    token: order.posToken,
+    paymentTypes: {
+      $elemMatch: {
+        type: { $in: (order?.paidAmounts || []).map(({ type }) => type) },
+        scoreCampaignId: { $exists: true },
+      },
+    },
+  });
+
+  if (pos) {
+    const { paymentTypes = [] } = pos;
+    for (const paymentType of paymentTypes) {
+      if (
+        paymentType.scoreCampaignId &&
+        (order?.paidAmounts || []).find(({ type }) => type === paymentType.type)
+      ) {
+        try {
+          await sendTRPCMessage({
+            subdomain,
+
+            pluginName: 'loyalty',
+            method: 'mutation',
+            module: 'score',
+            action: 'doScoreCampaign',
+            input: {
+              ownerType: order.customerType || 'customer',
+              ownerId: order.customerId,
+              campaignId: paymentType.scoreCampaignId,
+              target: order,
+              actionMethod: 'subtract',
+              serviceName: 'pos',
+              targetId: (order as any)?._id,
+            },
+          });
+        } catch (error) {
+          console.log(error);
+          throw new Error(error.message);
+        }
+      }
+    }
+  }
+
+  const confirmItems = order.items || [];
+
+  if (!confirmItems.length) {
+    return;
+  }
+  const checkInfo = {};
+
+  for (const item of confirmItems) {
+    checkInfo[item.productId] = {
+      voucherId: item.bonusVoucherId,
+      count: item.bonusCount,
+    };
+  }
+
+  try {
+    await sendTRPCMessage({
+      subdomain,
+
+      pluginName: 'loyalty',
+      method: 'mutation',
+      module: 'loyalty',
+      action: 'confirmLoyalties',
+      input: {
+        checkInfo,
+        extraInfo: {
+          ...(order.extraInfo || {}),
+          ownerType: order.customerType?.trim() || 'customer',
+          ownerId: order.customerId || null,
+          targetType: 'pos',
+          targetId: (order as any)?._id,
+        },
+      },
+    });
+  } catch (e) {
+    throw new Error(e.message);
+  }
+};
+
+const syncOrderScoreCampaigns = async ({
+  subdomain,
+  newOrder,
+  oldOrder,
+}: {
+  subdomain: string;
+  newOrder: IPosOrderDocument;
+  oldOrder?: IPosOrderDocument;
+}) => {
+  if (!newOrder.customerId) {
+    return;
+  }
+
+  try {
+    await sendTRPCMessage({
+      subdomain,
+      pluginName: 'loyalty',
+      method: 'mutation',
+      module: 'score',
+      action: 'consumeTargetChange',
+      input: {
+        contentType: 'sales:posOrder',
+        serviceName: 'sales',
+        targetId: newOrder._id,
+        target: newOrder,
+        oldTarget: oldOrder,
+        ownerHints: {
+          [newOrder.customerType || 'customer']: newOrder.customerId,
+          customer: newOrder.customerId,
+          user: newOrder.userId,
+        },
+      },
+      defaultValue: null,
+    });
+  } catch (error) {
+    console.log(subdomain, error.message);
+  }
+};
+
+const updateCustomer = async ({ subdomain, doneOrder }) => {
+  const deliveryInfo = doneOrder.deliveryInfo || {};
+  const {
+    marker = {},
+    address,
+    description,
+    phone,
+    email,
+    saveInfo,
+  } = deliveryInfo;
+
+  const customerType = doneOrder.customerType || 'customer';
+  if (
+    saveInfo &&
+    doneOrder.customerId &&
+    ['customer', 'company'].includes(customerType)
+  ) {
+    const moduleTxt = customerType === 'company' ? 'companies' : 'customers';
+
+    const pushInfo: any = {};
+
+    if (
+      marker &&
+      (marker.longitude || marker.lng) &&
+      (marker.latitude || marker.lat)
+    ) {
+      pushInfo.addresses = {
+        id: `${marker.longitude || marker.lng}_${
+          marker.latitude || marker.lat
+        }`,
+        location: {
+          type: 'Point',
+          coordinates: [
+            marker.longitude || marker.lng,
+            marker.latitude || marker.lat,
+          ],
+        },
+        address,
+        short: description,
+      };
+    }
+
+    if (phone) {
+      pushInfo.phones = phone;
+    }
+
+    if (email) {
+      pushInfo.emails = email;
+    }
+
+    if (Object.keys(pushInfo).length) {
+      await sendTRPCMessage({
+        subdomain,
+
+        method: 'mutation',
+        pluginName: 'core',
+        module: moduleTxt,
+        action: 'updateOne',
+        input: {
+          selector: { _id: doneOrder.customerId },
+          modifier: {
+            $addToSet: pushInfo,
+          },
+        },
+      });
+    }
+  }
+};
+
+const createDeliveryDeal = async ({ subdomain, models, doneOrder, pos }) => {
+  const { deliveryConfig = {} } = pos;
+  const deliveryInfo = doneOrder.deliveryInfo || {};
+  const { marker = {}, description } = deliveryInfo;
+
+  const dealsData: any = {
+    name: `Delivery: ${doneOrder.number}`,
+    startDate: doneOrder.createdAt,
+    closeDate: doneOrder.dueDate,
+    description: `<p>${doneOrder.description || ''}</p> <p>${
+      description || ''
+    }</p>`,
+    stageId: deliveryConfig.stageId,
+    assignedUserIds: deliveryConfig.assignedUserIds,
+    watchedUserIds: deliveryConfig.watchedUserIds,
+    productsData: doneOrder.items.map((i) => ({
+      productId: i.productId,
+      uom: 'PC',
+      currency: 'MNT',
+      quantity: i.count,
+      unitPrice: i.unitPrice,
+      amount: i.count * i.unitPrice,
+      tickUsed: true,
+    })),
+  };
+
+  if (deliveryConfig.mapCustomField) {
+    // {
+    //   "locationValue": {
+    //     "type": "Point",
+    //     "coordinates": [
+    //       106.936283111572,
+    //       47.920138551642
+    //     ]
+    //   },
+    //   "field": "dznoBhE3XCkCaHuBX",
+    //   "value": {
+    //     "lat": 47.920138551642,
+    //     "lng": 106.936283111572
+    //   },
+    //   "stringValue": "106.93628311157227,47.920138551642026"
+    // }
+
+    const field = deliveryConfig.mapCustomField.replace(
+      'customFieldsData.',
+      '',
+    );
+
+    dealsData.propertiesData = {
+      [field]: {
+        type: 'Point',
+        coordinates: [
+          marker.longitude || marker.lng,
+          marker.latitude || marker.lat,
+        ],
+      },
+    };
+  }
+
+  if (doneOrder.deliveryInfo?.dealId) {
+    const deal = await sendTRPCMessage({
+      subdomain,
+      method: 'mutation',
+      pluginName: 'sales',
+      module: 'deal',
+      action: 'updateOne',
+      input: {
+        selector: { _id: doneOrder.deliveryInfo.dealId },
+        modifier: dealsData,
+      },
+    });
+
+    await sendTRPCMessage({
+      subdomain,
+      method: 'mutation',
+      pluginName: 'sales',
+      module: 'deal',
+      action: 'subscriptionWrapper',
+      input: {
+        action: 'update',
+        deal,
+        pipelineId: deliveryConfig.pipelineId,
+      },
+    });
+  } else {
+    const deal = await sendTRPCMessage({
+      subdomain,
+
+      method: 'mutation',
+      pluginName: 'sales',
+      module: 'deal',
+      action: 'create',
+      input: {
+        ...dealsData,
+      },
+    });
+    if (
+      doneOrder.customerId &&
+      deal._id &&
+      ['customer', 'company'].includes(doneOrder.customerType || 'customer')
+    ) {
+      await sendTRPCMessage({
+        subdomain,
+        method: 'mutation',
+        pluginName: 'core',
+        module: 'relation',
+        action: 'createRelation',
+        input: {
+          entities: [
+            {
+              contentType: 'sales:deal',
+              contentId: deal._id,
+            },
+            {
+              contentType: `core:${doneOrder.customerType || 'customer'}`,
+              contentId: doneOrder.customerId,
+            },
+          ],
+        },
+      });
+    }
+
+    await sendTRPCMessage({
+      subdomain,
+
+      method: 'mutation',
+      pluginName: 'sales',
+      module: 'deal',
+      action: 'subscriptionWrapper',
+      input: {
+        action: 'create',
+        deal,
+        pipelineId: deliveryConfig.pipelineId,
+      },
+    });
+
+    await models.PosOrders.updateOne(
+      { _id: doneOrder },
+      {
+        $set: {
+          deliveryInfo: {
+            ...deliveryInfo,
+            dealId: deal._id,
+          },
+        },
+      },
+    );
+  }
+};
+
+export const statusToDone = async ({
+  subdomain,
+  models,
+  order,
+  pos,
+}: {
+  subdomain;
+  models;
+  order;
+  pos;
+}) => {
+  // must have
+  const doneOrder = await models.PosOrders.findOne({
+    _id: order._id,
+  }).lean();
+
+  if (!doneOrder) {
+    return {};
+  }
+
+  await createDeliveryDeal({ subdomain, models, doneOrder, pos });
+
+  await updateCustomer({ subdomain, doneOrder });
+
+  if (pos.isOnline && doneOrder.subBranchId) {
+    const toPos = await models.Pos.findOne({
+      branchId: doneOrder.subBranchId,
+      _id: { $ne: pos._id },
+    })
+      .sort({ onServer: -1, name: 1 })
+      .lean();
+
+    // paid order info to offline pos
+    if (toPos) {
+      await sendPosclientMessage({
+        subdomain,
+        method: 'mutation',
+        action: 'syncOrderFromPos',
+        input: {
+          order: {
+            ...doneOrder,
+            posToken: doneOrder.posToken,
+            subToken: toPos.token,
+            status: 'reDoing',
+          },
+        },
+        pos: toPos,
+      });
+    }
+  }
+
+  return {
+    status: 'success',
+  };
+};
+
+const createDealPerOrder = async ({
+  subdomain,
+  models,
+  pos,
+  newOrder,
+}: {
+  subdomain: string;
+  models: IModels;
+  pos: IPosDocument;
+  newOrder: IPosOrderDocument;
+}) => {
+  // ===> sync cards config then
+  const { cardsConfig } = pos;
+
+  const currentCardsConfig: any = (Object.values(cardsConfig || {}) || []).find(
+    (c) =>
+      (c || ({} as any)).branchId && (c as any).branchId === newOrder.branchId,
+  );
+
+  if (currentCardsConfig?.stageId) {
+    const paymentsData: any = {};
+    if (newOrder.cashAmount) {
+      paymentsData.cash = {
+        amount: newOrder.cashAmount,
+        currency: 'MNT',
+      };
+    }
+    if (newOrder.mobileAmount) {
+      paymentsData.bank = {
+        amount: newOrder.cashAmount,
+        currency: 'MNT',
+      };
+    }
+    if (newOrder.paidAmounts?.length) {
+      let otherAmount = 0;
+      for (const paidAmount of newOrder.paidAmounts) {
+        otherAmount += paidAmount.amount;
+      }
+      paymentsData.other = {
+        amount: newOrder.paidAmounts.reduce(
+          (sum, curr) => curr.amount + sum,
+          0,
+        ),
+        currency: 'MNT',
+      };
+    }
+
+    const cardDeal = await sendTRPCMessage({
+      subdomain,
+
+      method: 'mutation',
+      pluginName: 'sales',
+      module: 'deal',
+      action: 'create',
+      input: {
+        name: `Cards: ${newOrder.number}`,
+        startDate: newOrder.createdAt,
+        description: `<p>${newOrder.description}</p>`,
+        stageId: currentCardsConfig.stageId,
+        assignedUserIds: currentCardsConfig.assignedUserIds,
+        productsData: (newOrder.items || []).map((i) => ({
+          productId: i.productId,
+          uom: 'PC',
+          currency: 'MNT',
+          quantity: i.count,
+          unitPrice: i.unitPrice,
+          amount: i.count * (i.unitPrice || 0),
+          tickUsed: true,
+        })),
+        paymentsData,
+      },
+    });
+    if (newOrder.customerId && cardDeal._id) {
+      await sendTRPCMessage({
+        subdomain,
+        method: 'mutation',
+        pluginName: 'core',
+        module: 'relation',
+        action: 'createRelation',
+        input: {
+          entities: [
+            {
+              contentType: 'sales:deal',
+              contentId: cardDeal._id,
+            },
+            {
+              contentType: `core:${newOrder.customerType || 'customer'}`,
+              contentId: newOrder.customerId,
+            },
+          ],
+        },
+      });
+    }
+    await sendTRPCMessage({
+      subdomain,
+
+      method: 'mutation',
+      pluginName: 'sales',
+      module: 'deal',
+      action: 'subscriptionWrapper',
+      input: {
+        action: 'create',
+        deal: cardDeal,
+        pipelineId: currentCardsConfig.pipelineId,
+      },
+    });
+
+    await models.PosOrders.updateOne(
+      { _id: newOrder._id },
+      { $set: { convertDealId: cardDeal._id } },
+    );
+    return cardDeal._id;
+  }
+  // end sync cards config then <
+  return;
+};
+
+export const syncOrderFromClient = async ({
+  subdomain,
+  models,
+  order,
+  items,
+  pos,
+  posToken,
+  responses,
+}: {
+  subdomain: string;
+  models: IModels;
+  order;
+  items;
+  pos: IPosDocument;
+  posToken: string;
+  responses;
+}) => {
+  const enabledMN = await isEnabled('mongolian');
+
+  const { oldOrder, newOrder } = await models.PosOrders.createOrUpdate({
+    ...order,
+    posToken,
+    posId: pos._id,
+    items,
+    scopeBrandIds: pos.scopeBrandIds,
+    branchId: order.branchId || pos.branchId,
+    departmentId: order.departmentId || pos.departmentId,
+  });
+
+  if (enabledMN) {
+    const putResponses = responses
+      ?.filter((resp) => resp._id)
+      .map((resp) => ({ ...resp, posToken }));
+
+    if (putResponses?.length) {
+      await sendTRPCMessage({
+        subdomain,
+        method: 'mutation',
+        pluginName: 'mongolian',
+        module: 'putResponses',
+        action: 'syncPutResponses',
+        input: {
+          putResponses,
+        },
+      });
+    }
+  }
+
+  let convertDealId;
+  if (newOrder.paidDate) {
+    if (newOrder.customerId && (await checkServiceRunning('automations'))) {
+      try {
+        await syncOrderScoreCampaigns({
+          subdomain,
+          newOrder,
+          oldOrder,
+        });
+
+        sendAutomationTrigger(subdomain, {
+          type: 'pos:posOrder',
+          targets: [newOrder],
+        });
+      } catch (e) {
+        console.log(subdomain, e.message);
+      }
+    }
+
+    try {
+      await confirmLoyalties(subdomain, newOrder);
+    } catch (e) {
+      console.log(subdomain, e.message);
+    }
+
+    try {
+      convertDealId = await createDealPerOrder({
+        subdomain,
+        models,
+        pos,
+        newOrder,
+      });
+    } catch (e) {
+      console.log(subdomain, e.message);
+    }
+  }
+
+  if (pos.isOnline && newOrder.subBranchId) {
+    const toPos = await models.Pos.findOne({
+      branchId: newOrder.subBranchId,
+      _id: { $ne: pos._id },
+    })
+      .sort({ onServer: -1, name: 1 })
+      .lean();
+
+    // paid order info to offline pos
+    if (toPos) {
+      await sendPosclientMessage({
+        subdomain,
+        method: 'mutation',
+        action: 'syncOrderFromPos',
+        input: {
+          order: {
+            ...newOrder,
+            convertDealId,
+            posToken,
+            subToken: toPos.token,
+          },
+        },
+        pos: toPos,
+      });
+    }
+
+    // change branch and before another pos synced then remove from befort sync
+    if (
+      oldOrder?.subBranchId &&
+      newOrder.subBranchId !== oldOrder?.subBranchId
+    ) {
+      const toCancelPos = await models.Pos.findOne({
+        branchId: oldOrder.subBranchId,
+        _id: { $ne: pos._id },
+      }).lean();
+
+      if (toCancelPos) {
+        await sendPosclientMessage({
+          subdomain,
+          action: 'syncOrderFromPosRemove',
+          input: {
+            order: { ...newOrder, posToken, subToken: toCancelPos.token },
+          },
+          pos: toCancelPos,
+        });
+      }
+    }
+  }
+
+  const syncedResponseIds = enabledMN
+    ? (
+      (await sendTRPCMessage({
+        subdomain,
+        pluginName: 'mongolian',
+        module: 'putResponses',
+        action: 'find',
+        input: {
+          query: { _id: { $in: (responses || []).map((resp) => resp._id) } },
+        },
+        defaultValue: [],
+      })) || []
+    ).map((r) => r._id)
+    : [];
+
+  // return info saved
+  await sendPosclientMessage({
+    subdomain,
+    method: 'mutation',
+    action: `updateSynced`,
+    input: {
+      status: 'ok',
+      posToken,
+      responseIds: syncedResponseIds,
+      orderId: newOrder._id,
+      convertDealId,
+    },
+    pos,
+  });
+};
+
+const checkProductsByRule = async (subdomain, products, rule) => {
+  let filterIds: string[] = [];
+  const productIds = products.map((p) => p._id);
+
+  if (rule.productCategoryIds?.length) {
+    const includeCatIds = await getChildCategories(
+      subdomain,
+      rule.productCategoryIds,
+    );
+
+    const includeProductIdsCat = products
+      .filter((p) => includeCatIds.includes(p.categoryId))
+      .map((p) => p._id);
+    filterIds = filterIds.concat(
+      _.intersection(includeProductIdsCat, productIds),
+    );
+  }
+
+  if (rule.tagIds?.length) {
+    const includeTagIds = await getChildTags(subdomain, rule.tagIds);
+
+    const includeProductIdsTag = products
+      .filter((p) => _.intersection(includeTagIds, p.tagIds || []).length)
+      .map((p) => p._id);
+    filterIds = filterIds.concat(
+      _.intersection(includeProductIdsTag, productIds),
+    );
+  }
+
+  if (rule.productIds?.length) {
+    filterIds = filterIds.concat(_.intersection(rule.productIds, productIds));
+  }
+
+  if (!filterIds.length) {
+    return [];
+  }
+
+  // found an special products
+  const filterProducts = products.filter((p) => filterIds.includes(p._id));
+  if (rule.excludeCatIds?.length) {
+    const excludeCatIds = await getChildCategories(
+      subdomain,
+      rule.excludeCatIds,
+    );
+
+    const excProductIdsCat = filterProducts
+      .filter((p) => excludeCatIds.includes(p.categoryId))
+      .map((p) => p._id);
+    filterIds = filterIds.filter((f) => !excProductIdsCat.includes(f));
+  }
+
+  if (rule.excludeTagIds?.length) {
+    const excludeTagIds = await getChildTags(subdomain, rule.excludeTagIds);
+
+    const excProductIdsTag = filterProducts
+      .filter((p) => _.intersection(excludeTagIds, p.tagIds || []).length)
+      .map((p) => p._id);
+    filterIds = filterIds.filter((f) => !excProductIdsTag.includes(f));
+  }
+
+  if (rule.excludeProductIds?.length) {
+    filterIds = filterIds.filter((f) => !rule.excludeProductIds.includes(f));
+  }
+
+  return filterIds;
+};
+
+export const calcProductsTaxRule = async (
+  subdomain: string,
+  config,
+  products,
+) => {
+  const vatRules =
+    (config?.reverseVatRules?.length &&
+      (await sendTRPCMessage({
+        subdomain,
+
+        pluginName: 'mongolian',
+        module: 'productRules',
+        action: 'find',
+        input: { _id: { $in: config.reverseVatRules } },
+        defaultValue: [],
+      }))) ||
+    [];
+
+  const ctaxRules =
+    (config?.reverseCtaxRules?.length &&
+      (await sendTRPCMessage({
+        subdomain,
+
+        pluginName: 'mongolian',
+        module: 'productRules',
+        action: 'find',
+        input: { _id: { $in: config.reverseCtaxRules } },
+        defaultValue: [],
+      }))) ||
+    [];
+
+  const productsById = {};
+  for (const product of products) {
+    productsById[product._id] = product;
+  }
+
+  if (vatRules.length) {
+    for (const rule of vatRules) {
+      const productIdsByRule = await checkProductsByRule(
+        subdomain,
+        products,
+        rule,
+      );
+
+      for (const pId of productIdsByRule) {
+        if (!productsById[pId].taxRule) {
+          productsById[pId].taxRule = {};
+        }
+
+        productsById[pId].taxRule.taxCode = rule.taxCode;
+        productsById[pId].taxRule.taxType = rule.taxType;
+      }
+    }
+  }
+
+  if (ctaxRules.length) {
+    for (const rule of ctaxRules) {
+      const productIdsByRule = await checkProductsByRule(
+        subdomain,
+        products,
+        rule,
+      );
+
+      for (const pId of productIdsByRule) {
+        if (!productsById[pId].taxRule) {
+          productsById[pId].taxRule = {};
+        }
+
+        productsById[pId].taxRule.citytaxCode = rule.taxCode;
+        productsById[pId].taxRule.citytaxPercent = rule.taxPercent;
+      }
+    }
+  }
+
+  return productsById;
+};

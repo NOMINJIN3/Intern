@@ -1,0 +1,112 @@
+import { IntegrationLogo } from '@/integrations/components/IntegrationLogo';
+import { IntegrationsRecordTable } from '@/integrations/components/IntegrationsRecordTable';
+import { INTEGRATIONS } from '@/integrations/constants/integrations';
+import { IntegrationType } from '@/types/Integration';
+import { IconChevronLeft } from '@tabler/icons-react';
+import { Button, getPluginAssetsUrl } from 'erxes-ui';
+import { lazy, Suspense } from 'react';
+import { useNavigate, useParams } from 'react-router';
+
+const ErxesMessengerDetail = lazy(() =>
+  import('@/integrations/erxes-messenger/components/ErxesMessengerDetail').then(
+    (module) => ({
+      default: module.ErxesMessengerDetail,
+    }),
+  ),
+);
+
+const FacebookIntegrationDetail = lazy(() =>
+  import('@/integrations/facebook/components/FacebookIntegrationDetail').then(
+    (module) => ({
+      default: module.FacebookIntegrationDetail,
+    }),
+  ),
+);
+
+const ImapIntegrationDetail = lazy(() =>
+  import('@/integrations/imap/components/ImapIntegrationDetail').then(
+    (module) => ({
+      default: module.ImapIntegrationDetail,
+    }),
+  ),
+);
+
+const CallIntegrationDetail = lazy(() =>
+  import('@/integrations/call/components/CallIntegrationDetail').then(
+    (module) => ({
+      default: module.CallIntegrationDetail,
+    }),
+  ),
+);
+
+const InstagramIntegrationDetail = lazy(() =>
+  import('@/integrations/instagram/components/InstagramIntegrationDetail').then(
+    (module) => ({
+      default: module.InstagramIntegrationDetail,
+    }),
+  ),
+);
+
+export const IntegrationDetailPage = () => {
+  const { integrationType, id } = useParams<{
+    integrationType: string;
+    id: string;
+  }>();
+  const navigate = useNavigate();
+
+  const integration =
+    INTEGRATIONS[integrationType as keyof typeof INTEGRATIONS];
+
+  return (
+    <div className="mx-auto p-5 w-full max-w-5xl flex flex-col gap-8 overflow-hidden">
+      <div>
+        <Button
+          variant="ghost"
+          className="text-muted-foreground"
+          onClick={() => {
+            if (!id) {
+              navigate('/settings/frontline/channels');
+              return;
+            }
+            navigate(`/settings/frontline/channels/${id}`);
+          }}
+        >
+          <IconChevronLeft />
+          Integrations
+        </Button>
+      </div>
+      <div className="flex gap-2">
+        <IntegrationLogo
+          img={getPluginAssetsUrl('frontline', integration?.img || '')}
+          name={integration?.name || ''}
+        />
+        <div className="flex flex-col gap-1">
+          <h6 className="font-semibold text-sm">{integration?.name}</h6>
+          <span className="text-sm text-muted-foreground font-medium">
+            {integration?.description}
+          </span>
+        </div>
+      </div>
+      <Suspense fallback={<div />}>
+        {integrationType === IntegrationType.ERXES_MESSENGER && (
+          <ErxesMessengerDetail />
+        )}
+        {integrationType === IntegrationType.FACEBOOK_MESSENGER && (
+          <FacebookIntegrationDetail />
+        )}
+        {integrationType === IntegrationType.FACEBOOK_POST && (
+          <FacebookIntegrationDetail isPost />
+        )}
+        {integrationType === IntegrationType.CALL && <CallIntegrationDetail />}
+        {integrationType === IntegrationType.IMAP && <ImapIntegrationDetail />}
+        {integrationType === IntegrationType.INSTAGRAM_MESSENGER && (
+          <InstagramIntegrationDetail />
+        )}
+        {integrationType === IntegrationType.INSTAGRAM_POST && (
+          <InstagramIntegrationDetail isPost />
+        )}
+      </Suspense>
+      <IntegrationsRecordTable />
+    </div>
+  );
+};
